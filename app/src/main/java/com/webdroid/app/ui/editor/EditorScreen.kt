@@ -153,9 +153,9 @@ fun EditorScreen(
     var refetchSerial by remember { mutableIntStateOf(0) }
 
     val normalized = UrlUtils.normalize(url)
-    val clipboardUrl = remember {
-        clipboard.getText()?.text?.trim()?.takeIf { existing == null && UrlUtils.looksLikeUrl(it) && it.length < 2000 }
-    }
+    // hasText() doesn't trigger Android's "pasted from clipboard" notice; the
+    // text itself is only read when the user taps the chip.
+    val clipboardHasText = remember { existing == null && clipboard.hasText() }
 
     // Auto-detect name, icon and colours a moment after the URL settles.
     LaunchedEffect(normalized, refetchSerial) {
@@ -271,7 +271,7 @@ fun EditorScreen(
                 keyboardActions = KeyboardActions(onNext = { focus.moveFocus(androidx.compose.ui.focus.FocusDirection.Down) }),
                 modifier = Modifier.fillMaxWidth(),
             )
-            AnimatedVisibility(visible = url.isBlank() && clipboardUrl != null, enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
+            AnimatedVisibility(visible = url.isBlank() && clipboardHasText, enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
                 Row(
                     Modifier
                         .padding(top = 10.dp)
@@ -279,14 +279,15 @@ fun EditorScreen(
                         .background(Clay.SurfaceCard)
                         .clickable {
                             haptics.tick()
-                            url = clipboardUrl.orEmpty()
+                            val text = clipboard.getText()?.text?.trim().orEmpty()
+                            if (UrlUtils.looksLikeUrl(text)) url = text else urlError = "The clipboard doesn't contain a link"
                         }
                         .padding(horizontal = 14.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Icon(Icons.Rounded.ContentPaste, null, tint = Clay.Ink, modifier = Modifier.size(16.dp))
                     Spacer(Modifier.width(8.dp))
-                    Text("Paste ${UrlUtils.displayHost(clipboardUrl)}", style = ClayType.Caption, color = Clay.Ink, maxLines = 1)
+                    Text("Paste link from clipboard", style = ClayType.Caption, color = Clay.Ink, maxLines = 1)
                 }
             }
             if (urlError != null) {

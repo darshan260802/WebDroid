@@ -68,7 +68,15 @@ jobs:
           fi
 
       - name: Assemble release APK
-        run: ./gradlew --no-daemon --stacktrace assembleRelease
+        shell: bash
+        run: ./gradlew --no-daemon assembleRelease 2>&1 | tee gradle-build.log
+
+      - name: Summarise build errors
+        if: failure()
+        shell: bash
+        run: |
+          echo "==== WebDroid build errors ===="
+          grep -E "^e: |error:|What went wrong|FAILED" -A3 gradle-build.log | grep -v "^--$" | head -200 || true
 
       - name: Collect APK
         id: apk

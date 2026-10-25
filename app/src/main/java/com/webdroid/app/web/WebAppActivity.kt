@@ -313,8 +313,8 @@ class WebAppActivity : FragmentActivity(), WebAppActions {
         super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
         player.onPipModeChanged(isInPictureInPictureMode)
         if (!isInPictureInPictureMode && lifecycle.currentState == androidx.lifecycle.Lifecycle.State.CREATED) {
-            // PiP window dismissed: stop unless background audio is wanted.
-            if (!AppSettings.get(this).state.value.backgroundPlay) player.exoPlayer?.pause()
+            // The PiP window was swiped away: stop, like any video app.
+            player.exoPlayer?.pause()
         }
     }
 
@@ -392,7 +392,7 @@ class WebAppActivity : FragmentActivity(), WebAppActions {
         )
     }
 
-    private fun setImmersive(immersive: Boolean) {
+    private fun applyImmersive(immersive: Boolean) {
         val controller = WindowInsetsControllerCompat(window, root)
         if (immersive) {
             controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
@@ -927,13 +927,17 @@ class WebAppActivity : FragmentActivity(), WebAppActions {
     }
 
     private fun onPlayerVisibility(visible: Boolean) {
-        setImmersive(visible)
+        applyImmersive(visible)
         webView?.pullEnabled = !visible
         if (visible) {
             player.applyOrientation()
             updatePipParams()
         } else {
             requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            if (Build.VERSION.SDK_INT >= 31) {
+                // Leaving the app without a video must not shrink the page into PiP.
+                runCatching { setPictureInPictureParams(android.app.PictureInPictureParams.Builder().setAutoEnterEnabled(false).build()) }
+            }
         }
     }
 
@@ -990,7 +994,7 @@ class WebAppActivity : FragmentActivity(), WebAppActions {
         fullscreenContainer.visibility = View.VISIBLE
         ui.siteFullscreen = true
         webView?.pullEnabled = false
-        setImmersive(true)
+        applyImmersive(true)
         if (AppSettings.get(this).state.value.autoRotate && lastVideoAspect >= 1.05f) {
             requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
         }
@@ -1006,7 +1010,7 @@ class WebAppActivity : FragmentActivity(), WebAppActions {
         if (!fromPage) callback?.onCustomViewHidden()
         ui.siteFullscreen = false
         webView?.pullEnabled = true
-        setImmersive(false)
+        applyImmersive(false)
         requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
         val attrs = window.attributes
         attrs.screenBrightness = android.view.WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
