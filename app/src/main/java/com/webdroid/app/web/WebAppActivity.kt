@@ -647,21 +647,27 @@ class WebAppActivity : FragmentActivity(), WebAppActions {
 
     private inner class Client : WebViewClient() {
         override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
-            // Route a VPN app's new domains before the request leaves.
-            if (vpnAttached) app?.let { VpnManager.observe(it, request.url.host) }
             sniffer.observe(request)
             if (request.isForMainFrame) {
                 documentUrl = request.url.toString()
+                routeThroughVpn(request)
                 return null
             }
-            if (!adblockOn) return null
-            if (!AdblockEngine.isReady && !AdblockEngine.awaitReady(1500)) return null
-            val response = RequestFilter.filter(applicationContext, request, documentUrl)
+            val response = if (adblockOn && (AdblockEngine.isReady || AdblockEngine.awaitReady(1500))) {
+                RequestFilter.filter(applicationContext, request, documentUrl)
+            } else null
             if (response != null) {
                 val count = blockedThisPage.incrementAndGet()
                 if (count % 4 == 1) runOnUiThread { ui.blockedCount = blockedThisPage.get() }
+            } else {
+                routeThroughVpn(request)
             }
             return response
+        }
+
+        /** A VPN app's new domains are routed before the request leaves (blocked ones never leave). */
+        private fun routeThroughVpn(request: WebResourceRequest) {
+            if (vpnAttached) app?.let { VpnManager.observe(it, request.url.host) }
         }
 
         override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
@@ -1224,8 +1230,11 @@ class WebAppActivity : FragmentActivity(), WebAppActions {
             }
 
             override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
-                if (!adblockOn || request.isForMainFrame || !AdblockEngine.isReady) return null
-                return RequestFilter.filter(applicationContext, request, request.requestHeaders["Referer"] ?: documentUrl)
+                val blocked = if (!adblockOn || request.isForMainFrame || !AdblockEngine.isReady) null
+                else RequestFilter.filter(applicationContext, request, request.requestHeaders["Referer"] ?: documentUrl)
+                // Sign-in popups of a VPN app go through its VPN too.
+                if (blocked == null && vpnAttached) app?.let { VpnManager.observe(it, request.url.host) }
+                return blocked
             }
         }
         popup.webChromeClient = object : WebChromeClient() {

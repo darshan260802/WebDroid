@@ -38,6 +38,7 @@ object TorController {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var service: TorService? = null
     private var bound = false
+    private var binding = false
     private var poller: Job? = null
     private var networkOn = false
 
@@ -83,11 +84,22 @@ object TorController {
     @Synchronized
     fun start(context: Context) {
         val app = context.applicationContext
-        if (bound) {
-            if (!networkOn) setNetwork(true)
+        if (bound || binding) {
+            if (bound && !networkOn) setNetwork(true)
             return
         }
-        writeTorrc(app, VpnProfiles.get(app).tor.value)
+        binding = true
+        _status.value = Status(Phase.STARTING, summary = "Starting Tor")
+        // torrc and the GeoIP copy (several MB) are written off the main thread.
+        scope.launch {
+            writeTorrc(app, VpnProfiles.get(app).tor.value)
+            android.os.Handler(android.os.Looper.getMainLooper()).post { bind(app) }
+        }
+    }
+
+    @Synchronized
+    private fun bind(app: Context) {
+        binding = false
         LocalBroadcastManager.getInstance(app).registerReceiver(
             receiver,
             IntentFilter().apply {
@@ -95,7 +107,6 @@ object TorController {
                 addAction(TorService.ACTION_ERROR)
             },
         )
-        _status.value = Status(Phase.STARTING, summary = "Starting Tor")
         bound = app.bindService(Intent(app, TorService::class.java), connection, Context.BIND_AUTO_CREATE)
         networkOn = bound
         if (!bound) _status.value = Status(Phase.ERROR, summary = "Couldn't start Tor")

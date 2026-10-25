@@ -103,8 +103,14 @@ object VpnManager {
 
     /** Domain WebDroid routes for a host: its registrable domain ("www.bbc.co.uk" -> "bbc.co.uk"). */
     fun domainOf(host: String): String? {
-        val h = host.lowercase().trimEnd('.')
-        if (h.isEmpty() || h == "localhost" || h.all { it.isDigit() || it == '.' } || h.contains(':')) return null
+        val h = host.lowercase().trimEnd('.').removePrefix("[").removeSuffix("]")
+        if (h.isEmpty() || h == "localhost" || h.endsWith(".local")) return null
+        if (h.all { it.isDigit() || it == '.' } || h.contains(':')) {
+            // IP literals route as themselves, except the local network.
+            val local = h.startsWith("127.") || h.startsWith("10.") || h.startsWith("192.168.") ||
+                Regex("^172\\.(1[6-9]|2\\d|3[01])\\.").containsMatchIn(h) || h == "::1" || h.startsWith("fe80") || h.startsWith("fd")
+            return if (local) null else h
+        }
         return "https://$h/".toHttpUrlOrNull()?.topPrivateDomain() ?: h
     }
 
