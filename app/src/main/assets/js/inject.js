@@ -186,9 +186,11 @@
   /* Media: report videos to the native player                           */
   /* ------------------------------------------------------------------ */
 
+  // Taps (not scrolls) mark a video as user-started; scrolling past muted
+  // feed previews must not pull them into the player.
   let lastGesture = 0;
   const onGesture = (ev) => { if (ev.isTrusted) { lastGesture = Date.now(); } };
-  for (const type of ['pointerdown', 'touchstart', 'touchend', 'click', 'keydown']) {
+  for (const type of ['click', 'keydown']) {
     window.addEventListener(type, onGesture, { capture: true, passive: true });
   }
 
@@ -205,6 +207,115 @@
     return src;
   };
 
+  // Streaming players (hls.js, dash.js, Shaka, Video.js, JW Player...) feed
+  // <video> through Media Source Extensions with a blob: URL. Recognise the
+  // manifests they download, by content type or by their first bytes, so
+  // the native player can open the same stream.
+  const MANIFEST_HINT = /m3u8|\.mpd|manifest|playlist|master|hls|dash|stream/i;
+  const reportedManifests = new Set();
+  const reportManifest = (url, kind, text) => {
+    try {
+      const abs = new URL(url, location.href).href;
+      if (!/^https?:/.test(abs) || reportedManifests.has(abs)) { return; }
+      reportedManifests.add(abs);
+      const master = kind === 'dash' || (typeof text === 'string' && text.indexOf('#EXT-X-STREAM-INF') !== -1);
+      const live = kind === 'hls' && typeof text === 'string' && text.indexOf('#EXT-X-ENDLIST') === -1 && text.indexOf('#EXTINF') !== -1;
+      post({ t: 'media', url: abs, kind, master, live, page: location.href });
+    } catch (e) { }
+  };
+  const kindFromType = (type) => {
+    type = String(type || '').toLowerCase();
+    if (type.indexOf('mpegurl') !== -1) { return 'hls'; }
+    if (type.indexOf('dash+xml') !== -1) { return 'dash'; }
+    return null;
+  };
+  const kindFromText = (text) => {
+    if (typeof text !== 'string') { return null; }
+    const head = text.slice(0, 400).replace(/^\uFEFF/, '').trimStart();
+    if (head.startsWith('#EXTM3U')) { return 'hls'; }
+    if (/^(<\?xml[^>]*>\s*)?(<!--[\s\S]*?-->\s*)*<MPD[\s>]/.test(head)) { return 'dash'; }
+    return null;
+  };
+  const decodeHead = (buf) => {
+    try { return new TextDecoder().decode(new Uint8Array(buf, 0, Math.min(400, buf.byteLength))); } catch (e) { return ''; }
+  };
+  try {
+    const xhrOpen = XMLHttpRequest.prototype.open;
+    XMLHttpRequest.prototype.open = function (method, url) {
+      try { this.__wdUrl = url; } catch (e) { }
+      return xhrOpen.apply(this, arguments);
+    };
+    const xhrSend = XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.send = function () {
+      try {
+        this.addEventListener('load', function () {
+          try {
+            const url = this.responseURL || this.__wdUrl;
+            let kind = kindFromType(this.getResponseHeader('content-type'));
+            let text = null;
+            if (this.responseType === '' || this.responseType === 'text') {
+              text = this.responseText;
+            } else if (this.responseType === 'arraybuffer' && this.response && this.response.byteLength < 4e6) {
+              text = decodeHead(this.response);
+            }
+            kind = kind || kindFromText(text);
+            if (kind) { reportManifest(url, kind, text); }
+          } catch (e) { }
+        });
+      } catch (e) { }
+      return xhrSend.apply(this, arguments);
+    };
+  } catch (e) { }
+  try {
+    const nativeFetch = window.fetch;
+    if (typeof nativeFetch === 'function') {
+      const wrapped = function (input, init) {
+        const pending = nativeFetch.apply(this, arguments);
+        try {
+          pending.then((res) => {
+            try {
+              if (!res || res.type === 'opaque') { return; }
+              const type = res.headers.get('content-type');
+              const kind = kindFromType(type);
+              const size = Number(res.headers.get('content-length') || 0);
+              const textual = !type || /text|octet-stream|xml|json|mpegurl/i.test(type);
+              if (kind) {
+                res.clone().text().then((t) => reportManifest(res.url, kind, t), () => reportManifest(res.url, kind, null));
+              } else if (textual && size < 2e6 && MANIFEST_HINT.test(res.url)) {
+                res.clone().text().then((t) => { const k = kindFromText(t); if (k) { reportManifest(res.url, k, t); } }, () => { });
+              }
+            } catch (e) { }
+          }, () => { });
+        } catch (e) { }
+        return pending;
+      };
+      try { Object.defineProperty(wrapped, 'toString', { value: () => nativeFetch.toString() }); } catch (e) { }
+      window.fetch = wrapped;
+    }
+  } catch (e) { }
+
+  // Player libraries that keep the original URL around.
+  const libraryManifest = (v) => {
+    try {
+      if (typeof window.jwplayer === 'function') {
+        const item = window.jwplayer().getPlaylistItem && window.jwplayer().getPlaylistItem();
+        const file = item && (item.file || (item.sources && item.sources[0] && item.sources[0].file));
+        if (file) { return file; }
+      }
+    } catch (e) { }
+    try {
+      if (window.videojs && typeof window.videojs.getPlayers === 'function') {
+        for (const p of Object.values(window.videojs.getPlayers())) {
+          if (p && p.el && p.el() && p.el().contains(v) && p.currentSrc) {
+            const src = p.currentSrc();
+            if (src && !src.startsWith('blob:')) { return src; }
+          }
+        }
+      }
+    } catch (e) { }
+    return '';
+  };
+
   const describe = (v, event) => {
     if (!v.__webdroidId) {
       try { Object.defineProperty(v, '__webdroidId', { value: ++videoSeq }); } catch (e) { return null; }
@@ -218,6 +329,7 @@
       event,
       id,
       src: sourceOf(v),
+      lib: libraryManifest(v),
       poster: v.poster || '',
       title: (isTop ? document.title : '') || '',
       pageUrl: location.href,
@@ -234,17 +346,31 @@
     };
   };
 
-  document.addEventListener('play', (ev) => {
+  const onPlay = (ev) => {
     const v = ev.target;
     if (!(v instanceof HTMLVideoElement)) { return; }
     const d = describe(v, 'play');
     if (d) { post(d); }
-  }, true);
-
-  document.addEventListener('pause', (ev) => {
+  };
+  const onPause = (ev) => {
     const v = ev.target;
     if (v instanceof HTMLVideoElement && v.__webdroidId) { post({ t: 'videoPause', id: v.__webdroidId }); }
-  }, true);
+  };
+  const watchRoot = (root) => {
+    root.addEventListener('play', onPlay, true);
+    root.addEventListener('pause', onPause, true);
+  };
+  watchRoot(document);
+  // Media events don't leave shadow trees; watch every shadow root too
+  // (custom player elements like <media-controller> live there).
+  try {
+    const attachShadow = Element.prototype.attachShadow;
+    Element.prototype.attachShadow = function () {
+      const root = attachShadow.apply(this, arguments);
+      try { watchRoot(root); } catch (e) { }
+      return root;
+    };
+  } catch (e) { }
 
   const videoById = (id) => {
     const ref = videos.get(id || lastVideoId);
@@ -427,6 +553,12 @@
       case 'togglePlay': {
         const v = activeVideo();
         if (v) { if (v.paused) { v.play().catch(() => { }); } else { v.pause(); } }
+        break;
+      }
+      case 'describe': {
+        // The site went fullscreen: tell native which video that is.
+        const v = activeVideo() || document.querySelector('video');
+        if (v) { const d = describe(v, msg.event || 'fullscreen'); if (d) { post(d); } }
         break;
       }
       case 'probe': {

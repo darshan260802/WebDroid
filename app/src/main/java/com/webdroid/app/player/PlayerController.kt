@@ -27,6 +27,9 @@ import androidx.media3.exoplayer.ExoPlayer
 import com.webdroid.app.R
 import com.webdroid.app.data.AppSettings
 import com.webdroid.app.data.FitMode
+import com.webdroid.app.util.Net
+import okhttp3.CookieJar
+import okhttp3.OkHttpClient
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -73,12 +76,21 @@ class PlayerController(
     private val activity: Activity,
     private val scope: CoroutineScope,
     private val sessionIntent: () -> Intent,
+    /** The web app's cookies, so the stream is fetched signed in like the page. */
+    private val cookieJar: () -> CookieJar,
+    /** HTTP client for this app's streams (routes through its VPN when it has one). */
+    private val httpClient: () -> OkHttpClient = { Net.client },
 ) {
     val state = PlayerUiState()
 
     var onVisibilityChanged: ((Boolean) -> Unit)? = null
     var onClosed: ((VideoRequest, Long) -> Unit)? = null
     var onPipParamsChanged: (() -> Unit)? = null
+    /** The stream failed before playing anything: the page should play it instead. */
+    var onCannotPlay: ((VideoRequest) -> Unit)? = null
+
+    /** Whether the current stream has shown a frame or played audio yet. */
+    private var started = false
 
     private var player: ExoPlayer? = null
     private var ticker: Job? = null
@@ -93,6 +105,7 @@ class PlayerController(
     private val listener = object : Player.Listener {
         override fun onIsPlayingChanged(isPlaying: Boolean) {
             state.isPlaying = isPlaying
+            if (isPlaying) started = true
             if (isPlaying) {
                 activity.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                 scheduleHide()
@@ -109,7 +122,21 @@ class PlayerController(
             refreshProgress()
         }
 
+        override fun onRenderedFirstFrame() {
+            started = true
+        }
+
         override fun onPlayerError(error: PlaybackException) {
+            val request = state.request
+            val offline = error.errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED ||
+                error.errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT
+            if (!started && !offline && request != null && onCannotPlay != null) {
+                // Nothing played yet (wrong guess at the stream, refused, DRM...):
+                // quietly give the video back to the page rather than a black screen.
+                closeInternal(notify = false)
+                onCannotPlay?.invoke(request)
+                return
+            }
             state.error = when (error.errorCode) {
                 PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS -> "The site refused this stream (it may need the page's own player)."
                 PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
@@ -142,9 +169,10 @@ class PlayerController(
         if (state.visible) closeInternal(notify = true)
         val resume = if (settings.rememberPosition) positions.get(request.positionKey) else null
         val start = resume ?: request.startPositionMs
-        PlayerHolder.play(activity, request.copy(startPositionMs = start), sessionIntent())
+        started = false
         val exo = PlayerHolder.obtain(activity)
         exo.addListener(listener)
+        PlayerHolder.play(activity, request.copy(startPositionMs = start), sessionIntent(), cookieJar(), httpClient())
         exo.setPlaybackSpeed(1f)
         player = exo
         state.request = request
@@ -158,6 +186,7 @@ class PlayerController(
         state.landscapeLocked = null
         state.positionMs = start
         state.durationMs = 0
+        state.buffering = true
         state.visible = true
         showControls()
         runCatching { activity.startService(Intent(activity, PlaybackService::class.java)) }

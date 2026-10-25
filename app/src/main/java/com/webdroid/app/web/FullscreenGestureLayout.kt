@@ -88,13 +88,15 @@ class FullscreenGestureLayout(
                 val dx = ev.x - downX
                 val dy = ev.y - downY
                 if (mode == Mode.NONE && (abs(dx) > slop || abs(dy) > slop)) {
-                    // Leave the top/bottom edges to the site's own scrubber and system gestures.
-                    val edge = height * 0.12f
-                    if (downY < edge || downY > height - edge) return false
+                    // The site's own controls own the top bar and the bottom area (its
+                    // seek bar and buttons): gestures only start in the middle band,
+                    // and seeking needs a clearly horizontal swipe.
+                    if (downY < height * 0.18f || downY > height * 0.70f) return false
                     mode = when {
-                        abs(dx) > abs(dy) -> Mode.SEEK
-                        downX < width / 2f -> Mode.BRIGHTNESS
-                        else -> Mode.VOLUME
+                        abs(dx) > abs(dy) * 2f -> Mode.SEEK
+                        abs(dy) > abs(dx) * 1.5f && downX < width * 0.4f -> Mode.BRIGHTNESS
+                        abs(dy) > abs(dx) * 1.5f && downX > width * 0.6f -> Mode.VOLUME
+                        else -> return false
                     }
                     lastX = ev.x; lastY = ev.y
                     performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)

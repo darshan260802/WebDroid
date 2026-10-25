@@ -14,7 +14,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -29,6 +28,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
@@ -70,6 +70,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -81,6 +82,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.foundation.systemGestureExclusion
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.text.font.FontWeight
@@ -135,7 +137,9 @@ fun PlayerOverlay(
         val zoom = state.zoomScale
         AndroidView(
             factory = { context ->
-                PlayerView(context).apply {
+                // Inflated for surface_type="texture_view": a TextureView composes like any
+                // view (a SurfaceView can show black under overlays) and follows pinch zoom.
+                (android.view.LayoutInflater.from(context).inflate(com.webdroid.app.R.layout.player_view, null) as PlayerView).apply {
                     layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
                     useController = false
                     setShutterBackgroundColor(android.graphics.Color.BLACK)
@@ -255,8 +259,13 @@ fun PlayerOverlay(
                                 }
                                 when (mode) {
                                     DragMode.SEEK -> {
-                                        // One screen width scrubs ~90s (scaled for short clips).
-                                        val span = if (state.durationMs in 1..180_000) state.durationMs else 90_000L
+                                        // One screen width scrubs the whole of a short clip, and up to
+                                        // 10 minutes of a long video.
+                                        val span = when {
+                                            state.durationMs in 1..180_000 -> state.durationMs
+                                            state.durationMs > 0 -> (state.durationMs / 4).coerceIn(120_000L, 600_000L)
+                                            else -> 90_000L
+                                        }
                                         seekDelta += (delta.x / widthPx * span).toLong()
                                         val target = (seekStart + seekDelta).coerceIn(0, state.durationMs.takeIf { it > 0 } ?: Long.MAX_VALUE)
                                         dragSeekTarget = target
@@ -646,6 +655,11 @@ private fun PillButton(text: String, onClick: () -> Unit) {
     )
 }
 
+/**
+ * Scrubber: press anywhere on it to jump there, drag to scrub (the thumb and
+ * a time bubble follow the finger), release to seek. The touch area is much
+ * taller than the line, and system back gestures are kept off it.
+ */
 @Composable
 private fun SeekBar(
     positionMs: Long,
@@ -655,42 +669,71 @@ private fun SeekBar(
     onScrubEnd: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    var widthPx by remember { mutableFloatStateOf(1f) }
+    val haptics = rememberHaptics()
     var scrubbing by remember { mutableStateOf(false) }
-    val thumb by animateFloatAsState(if (scrubbing) 9f else 6f, label = "thumb")
+    val duration by rememberUpdatedState(durationMs)
+    val scrub by rememberUpdatedState(onScrub)
+    val scrubEnd by rememberUpdatedState(onScrubEnd)
+    val thumb by animateFloatAsState(if (scrubbing) 10f else 7f, label = "thumb")
+    val lineHeight by animateFloatAsState(if (scrubbing) 6f else 4f, label = "line")
     val progress = if (durationMs > 0) (positionMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f
     val buffered = if (durationMs > 0) (bufferedMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f
-    Canvas(
-        modifier
-            .heightIn(min = 36.dp)
-            .pointerInput(durationMs) {
-                detectTapGestures { offset ->
-                    if (durationMs > 0) {
-                        onScrub((offset.x / size.width * durationMs).toLong())
-                        onScrubEnd()
+    BoxWithConstraints(modifier.height(48.dp)) {
+        val widthPx = constraints.maxWidth.toFloat().coerceAtLeast(1f)
+        Canvas(
+            Modifier
+                .fillMaxSize()
+                .systemGestureExclusion()
+                .pointerInput(Unit) {
+                    awaitEachGesture {
+                        val down = awaitFirstDown(requireUnconsumed = false)
+                        if (duration <= 0) return@awaitEachGesture
+                        down.consume()
+                        fun at(x: Float) = (x.coerceIn(0f, size.width.toFloat()) / size.width * duration).toLong()
+                        scrubbing = true
+                        haptics.tick()
+                        scrub(at(down.position.x))
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                            if (!change.pressed) {
+                                change.consume()
+                                break
+                            }
+                            if (change.positionChange() != Offset.Zero) {
+                                scrub(at(change.position.x))
+                                change.consume()
+                            }
+                        }
+                        scrubbing = false
+                        scrubEnd()
                     }
                 }
-            }
-            .pointerInput(durationMs) {
-                detectHorizontalDragGestures(
-                    onDragStart = { scrubbing = true },
-                    onDragEnd = { scrubbing = false; onScrubEnd() },
-                    onDragCancel = { scrubbing = false; onScrubEnd() },
-                ) { change, _ ->
-                    if (durationMs > 0) {
-                        onScrub((change.position.x.coerceIn(0f, size.width.toFloat()) / size.width * durationMs).toLong())
-                    }
-                    change.consume()
-                }
-            }
-    ) {
-        widthPx = size.width
-        val y = size.height / 2
-        val h = 4.dp.toPx()
-        drawRoundRect(Color.White.copy(alpha = 0.22f), Offset(0f, y - h / 2), Size(size.width, h), CornerRadius(h))
-        drawRoundRect(Color.White.copy(alpha = 0.42f), Offset(0f, y - h / 2), Size(size.width * buffered, h), CornerRadius(h))
-        drawRoundRect(Accent, Offset(0f, y - h / 2), Size(size.width * progress, h), CornerRadius(h))
-        drawCircle(Color.White, thumb.dp.toPx(), Offset(size.width * progress, y))
+        ) {
+            val y = size.height / 2
+            val h = lineHeight.dp.toPx()
+            drawRoundRect(Color.White.copy(alpha = 0.22f), Offset(0f, y - h / 2), Size(size.width, h), CornerRadius(h))
+            drawRoundRect(Color.White.copy(alpha = 0.42f), Offset(0f, y - h / 2), Size(size.width * buffered, h), CornerRadius(h))
+            drawRoundRect(Accent, Offset(0f, y - h / 2), Size(size.width * progress, h), CornerRadius(h))
+            drawCircle(Color.White, thumb.dp.toPx(), Offset(size.width * progress, y))
+        }
+        // Time bubble above the thumb while scrubbing.
+        if (scrubbing && durationMs > 0) {
+            val bubbleWidth = 64.dp
+            val x = with(androidx.compose.ui.platform.LocalDensity.current) { (widthPx * progress).toDp() } - bubbleWidth / 2
+            Text(
+                PlayerController.formatTime(positionMs),
+                color = Color.Black,
+                style = ClayType.Caption.copy(fontWeight = FontWeight.SemiBold),
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                modifier = Modifier
+                    .offset(x = x.coerceIn(0.dp, maxWidth - bubbleWidth), y = (-30).dp)
+                    .width(bubbleWidth)
+                    .clip(ClayShapes.Pill)
+                    .background(Color.White)
+                    .padding(vertical = 4.dp),
+            )
+        }
     }
 }
 

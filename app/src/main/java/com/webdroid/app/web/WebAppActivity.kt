@@ -20,6 +20,7 @@ import android.media.AudioManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
 import android.os.Handler
 import android.os.Looper
 import android.os.Message
@@ -207,10 +208,15 @@ class WebAppActivity : FragmentActivity(), WebAppActions {
         icon = IconStore.get(this).load(loaded.iconFile)
         currentBarColor = loaded.themeColor ?: defaultBarColor()
 
-        player = PlayerController(this, lifecycleScope) { ShortcutHelper.launchIntent(this, app!!) }
+        player = PlayerController(
+            this, lifecycleScope,
+            sessionIntent = { ShortcutHelper.launchIntent(this, app!!) },
+            cookieJar = { WebViewCookieJar(cookieManager()) },
+        )
         player.onVisibilityChanged = { visible -> onPlayerVisibility(visible) }
         player.onClosed = { request, position -> onPlayerClosed(request, position) }
         player.onPipParamsChanged = { updatePipParams() }
+        player.onCannotPlay = { request -> onPlayerCannotPlay(request) }
 
         buildViews()
         applyBarColor(currentBarColor, animate = false)
@@ -876,6 +882,9 @@ class WebAppActivity : FragmentActivity(), WebAppActions {
             "theme" -> if (isMainFrame && !fromPopup) onThemeColor(obj)
             "video" -> if (!fromPopup) onVideoMessage(obj, reply)
             "videoPause" -> pageMediaPlaying = false
+            "media" -> obj.str("url")?.let { url ->
+                sniffer.observePage(url, obj.str("kind").orEmpty(), obj.bool("master"), obj.bool("live"), obj.str("page"))
+            }
             "blob" -> onBlobChunk(obj)
             "notify" -> onPageNotification(obj, reply)
             "notifyClose" -> obj.str("id")?.let { id -> app?.let { WebNotifier.cancel(this, it, id) }; notificationFrames.remove(id) }
@@ -915,21 +924,35 @@ class WebAppActivity : FragmentActivity(), WebAppActions {
         val w = obj.num("w")
         val h = obj.num("h")
         if (w > 0 && h > 0) lastVideoAspect = (w / h).toFloat()
-        if (obj.str("event") != "play") return
-        pageMediaPlaying = true
+        val event = obj.str("event")
+        val fullscreen = event == "fullscreen"
+        if (event != "play" && !fullscreen) return
+        if (event == "play") pageMediaPlaying = true
 
         val mode = current.settings.videoMode
-        if (mode == VideoMode.OFF || player.state.visible || ui.siteFullscreen) return
-        // Only user-started, reasonably large, non-looping videos (skip muted feed previews).
-        if (!obj.bool("gesture")) return
-        if (obj.bool("loop") && obj.bool("muted")) return
-        val area = obj.num("area")
-        val viewport = obj.num("viewport").coerceAtLeast(1.0)
-        if (area > 0 && area / viewport < 0.06) return
+        if (mode == VideoMode.OFF || player.state.visible) return
+        if (ui.siteFullscreen && !fullscreen) return
+        if (!fullscreen) {
+            // Only videos the user started: a tap in the page (any frame) shortly
+            // before, including a tap that navigated to the video's page.
+            val sinceTap = SystemClock.uptimeMillis() - (webView?.lastTapAt ?: 0L)
+            val tapped = obj.bool("gesture") || sinceTap < 3_000
+            val recentTap = tapped || sinceTap < 10_000
+            if (!recentTap) return
+            // Muted autoplay is a feed preview unless the user just tapped it.
+            if (obj.bool("muted") && !tapped) return
+            if (obj.bool("loop") && obj.bool("muted")) return
+            val duration = obj.num("dur")
+            if (duration > 0 && duration < 4 && obj.bool("loop")) return
+            val area = obj.num("area")
+            val viewport = obj.num("viewport").coerceAtLeast(1.0)
+            if (area > 0 && area / viewport < 0.05) return
+        }
 
         val request = resolveStream(obj, id) ?: return
         when (mode) {
             VideoMode.AUTO -> {
+                if (fullscreen) exitSiteFullscreen(fromPage = false)
                 sendCommand(reply, "{\"cmd\":\"pause\",\"id\":$id}")
                 openPlayer(request)
             }
@@ -938,31 +961,45 @@ class WebAppActivity : FragmentActivity(), WebAppActions {
         }
     }
 
+    /** The native player couldn't open the stream: hand the video back to the page. */
+    private fun onPlayerCannotPlay(request: VideoRequest) {
+        ui.showToast("Playing in the page instead")
+        val id = request.frameVideoId ?: return
+        lastVideoReply?.let { sendCommand(it, "{\"cmd\":\"resume\",\"id\":$id}") }
+        lastVideoReply?.let { sendCommand(it, "{\"cmd\":\"togglePlay\"}") }
+    }
+
     private fun resolveStream(obj: JsonObject, id: Int): VideoRequest? {
         val current = app ?: return null
         val src = obj.str("src").orEmpty()
+        val library = obj.str("lib").orEmpty()
         val pageUrl = obj.str("pageUrl")?.takeIf { it.startsWith("http") } ?: ui.url
-        val (url, kind) = when {
-            src.startsWith("http") -> {
-                val lower = src.lowercase()
-                src to when {
-                    lower.contains(".m3u8") -> MediaSniffer.Kind.HLS
-                    lower.contains(".mpd") -> MediaSniffer.Kind.DASH
-                    else -> MediaSniffer.Kind.PROGRESSIVE
-                }
+        fun kindOfUrl(u: String): MediaSniffer.Kind? {
+            val lower = u.lowercase().substringBefore('?')
+            return when {
+                lower.endsWith(".m3u8") || lower.endsWith(".m3u") -> MediaSniffer.Kind.HLS
+                lower.endsWith(".mpd") -> MediaSniffer.Kind.DASH
+                else -> sniffer.find(u)?.kind
             }
+        }
+        var referer: String? = null
+        val (url, kind) = when {
+            src.startsWith("http") -> src to (kindOfUrl(src) ?: if (src.contains(".m3u8", true)) MediaSniffer.Kind.HLS else null)
+            library.startsWith("http") -> library to kindOfUrl(library)
             else -> {
                 val stream = sniffer.bestManifest(maxAgeMs = 10 * 60_000L) ?: sniffer.latestProgressive() ?: return null
+                referer = stream.referer
                 stream.url to stream.kind
             }
         }
         return VideoRequest(
             url = url,
+            // null: unknown, the player probes the stream to find out.
             kind = kind,
+            referer = referer?.takeIf { it.startsWith("http") },
             title = obj.str("title")?.ifBlank { null } ?: ui.title,
             pageUrl = pageUrl,
             userAgent = webView?.settings?.userAgentString ?: Net.MOBILE_USER_AGENT,
-            cookies = runCatching { cookieManager().getCookie(url) }.getOrNull(),
             posterUrl = obj.str("poster"),
             appId = current.id,
             appName = current.name,
@@ -1018,6 +1055,10 @@ class WebAppActivity : FragmentActivity(), WebAppActions {
         }
         customView = view
         customViewCallback = callback
+        // A site going fullscreen is a clear "watch this": offer the native player.
+        if (app?.settings?.videoMode != VideoMode.OFF && !player.state.visible) {
+            (lastVideoReply ?: mainFrameReply)?.let { sendCommand(it, "{\"cmd\":\"describe\",\"event\":\"fullscreen\"}") }
+        }
         val audio = getSystemService(AUDIO_SERVICE) as AudioManager
         var volumeAcc = 0f
         val layout = FullscreenGestureLayout(this, view, object : FullscreenGestureLayout.Callbacks {
@@ -1668,6 +1709,7 @@ class WebAppActivity : FragmentActivity(), WebAppActions {
     override fun playOffer() {
         val offer = ui.videoOffer ?: return
         ui.videoOffer = null
+        if (ui.siteFullscreen) exitSiteFullscreen(fromPage = false)
         offer.request.frameVideoId?.let { id -> lastVideoReply?.let { sendCommand(it, "{\"cmd\":\"pause\",\"id\":$id}") } }
         openPlayer(offer.request)
     }

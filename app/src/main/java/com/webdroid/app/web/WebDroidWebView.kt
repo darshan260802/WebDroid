@@ -28,7 +28,17 @@ class WebDroidWebView(context: Context) : WebView(context) {
     /** Notified when the page scroll position changes (for the mini toolbar). */
     var onScrollChangedListener: ((scrollY: Int, oldScrollY: Int) -> Unit)? = null
 
+    /**
+     * Uptime of the last tap (not a scroll) on the page. A video that starts
+     * playing soon after a tap was started by the user, even when the page
+     * navigated in between or the tap landed in another frame.
+     */
+    var lastTapAt = 0L
+        private set
+
     private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop
+    private var downAt = 0L
+    private var movedBeyondSlop = false
     private var downX = 0f
     private var downY = 0f
     private var pullStartY = 0f
@@ -52,6 +62,8 @@ class WebDroidWebView(context: Context) : WebView(context) {
             MotionEvent.ACTION_DOWN -> {
                 downX = event.x
                 downY = event.y
+                downAt = event.eventTime
+                movedBeyondSlop = false
                 overscrolledTop = false
                 pulling = false
             }
@@ -69,6 +81,7 @@ class WebDroidWebView(context: Context) : WebView(context) {
                 }
                 val dy = event.y - downY
                 val dx = event.x - downX
+                if (abs(dx) > touchSlop || abs(dy) > touchSlop) movedBeyondSlop = true
                 if (pullEnabled && overscrolledTop && event.pointerCount == 1 &&
                     dy > touchSlop && abs(dy) > abs(dx) * 1.2f && scrollY == 0
                 ) {
@@ -84,6 +97,9 @@ class WebDroidWebView(context: Context) : WebView(context) {
                 }
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                if (event.actionMasked == MotionEvent.ACTION_UP && !movedBeyondSlop && event.eventTime - downAt < 600) {
+                    lastTapAt = event.eventTime
+                }
                 if (pulling) {
                     pulling = false
                     val distance = if (event.actionMasked == MotionEvent.ACTION_UP) {
