@@ -172,7 +172,7 @@ object TorController {
             var reportedPort = 0
             while (isActive) {
                 val svc = service ?: break
-                val port = runCatching { svc.socksPort }.getOrDefault(-1)
+                val port = runCatching { svc.getSocksPort() }.getOrDefault(-1)
                 if (port > 0 && port != reportedPort) {
                     reportedPort = port
                     _status.value = _status.value.copy(socksPort = port)

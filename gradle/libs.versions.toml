@@ -16,7 +16,8 @@ serialization = "1.9.0"
 coroutines = "1.10.2"
 zipline = "1.24.0"
 palette = "1.0.0"
-torAndroid = "0.4.9.14"
+# 0.4.9.x needs compileSdk 37; 0.4.8 is the long-term series.
+torAndroid = "0.4.8.21"
 localbroadcastmanager = "1.1.0"
 
 [libraries]
