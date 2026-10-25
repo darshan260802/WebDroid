@@ -35,6 +35,7 @@ jobs:
             cd tools/adblock
             npm ci --no-audit --no-fund
             node build.mjs --out ../../app/src/main/assets/adblock
+            node test.mjs ../../app/src/main/assets/adblock
           fi
 
       - uses: actions/setup-java@v4

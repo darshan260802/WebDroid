@@ -79,10 +79,6 @@ android {
         }
     }
 
-    androidResources {
-        noCompress += listOf("selfie")
-    }
-
     lint {
         abortOnError = false
         checkReleaseBuilds = false
