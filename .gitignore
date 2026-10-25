@@ -19,3 +19,4 @@ build/
 tools/adblock/node_modules/
 tools/adblock/.cache/
 tools/adblock/build/
+dist-local/
