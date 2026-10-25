@@ -5,6 +5,7 @@
  *   engine.js         uBO filtering engine bundled for QuickJS (see src/engine.js)
  *   selfie.json/.bin  default lists precompiled into uBO's engine tables
  *   cosmetic.json     cosmetic + scriptlet filter databases
+ *   psl.dat           public suffix list (for on-device recompiles)
  *   scriptlets.js     uBO scriptlet library for page injection
  *   procedural.js     uBO procedural cosmetic filterer for page injection
  *   war/*             uBO redirect resources (neutered scripts, blank media)
@@ -234,6 +235,7 @@ WD.releaseExport();
 fs.writeFileSync(path.join(outDir, 'selfie.json'), selfieJSON);
 fs.writeFileSync(path.join(outDir, 'selfie.bin'), Buffer.from(blob.buffer, blob.byteOffset, blob.byteLength));
 fs.writeFileSync(path.join(outDir, 'cosmetic.json'), cosmeticJSON);
+fs.writeFileSync(path.join(outDir, 'psl.dat'), psl.text);
 log(`compiled in ${t1 - t0} ms; selfie ${selfieJSON.length} chars + ${blob.length} bytes, cosmetic ${cosmeticJSON.length} chars`);
 log(`totals: ${JSON.stringify({ ...totals, lists: undefined })}`);
 
@@ -243,6 +245,7 @@ if (logs.length !== 0) { log('engine logs:', logs.slice(-10)); }
 fs.writeFileSync(path.join(outDir, 'catalog.json'), JSON.stringify({
     engineVersion: WD.version,
     builtAt,
+    blobSize: blob.length,
     psl: catalog.psl,
     lists: catalog.lists.map(l => ({ ...l, stats: listStats[l.id] })),
     totals: { ...totals, lists: undefined },

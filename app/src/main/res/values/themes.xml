@@ -6,5 +6,23 @@
         <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:windowLightStatusBar">true</item>
         <item name="android:windowLightNavigationBar">true</item>
+        <item name="android:colorAccent">@color/ink</item>
+    </style>
+
+    <!-- Web apps follow the system light/dark mode so prefers-color-scheme works. -->
+    <style name="Theme.WebDroid.WebApp" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/web_light</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
+        <item name="android:colorAccent">@color/ink</item>
+    </style>
+
+    <style name="Theme.WebDroid.WebApp.Dark" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/web_dark</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:colorAccent">@color/canvas</item>
     </style>
 </resources>

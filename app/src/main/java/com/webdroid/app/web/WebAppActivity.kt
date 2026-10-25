@@ -1,0 +1,1488 @@
+package com.webdroid.app.web
+
+import android.Manifest
+import android.animation.ArgbEvaluator
+import android.animation.ValueAnimator
+import android.annotation.SuppressLint
+import android.app.ActivityManager
+import android.content.BroadcastReceiver
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.content.pm.ActivityInfo
+import android.content.pm.PackageManager
+import android.content.res.Configuration
+import android.graphics.Bitmap
+import android.graphics.Color
+import android.media.AudioManager
+import android.net.Uri
+import android.os.Build
+import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.os.Message
+import android.util.Base64
+import android.view.View
+import android.view.ViewGroup
+import android.webkit.CookieManager
+import android.webkit.GeolocationPermissions
+import android.webkit.JsPromptResult
+import android.webkit.JsResult
+import android.webkit.PermissionRequest
+import android.webkit.ValueCallback
+import android.webkit.WebChromeClient
+import android.webkit.WebResourceError
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
+import android.webkit.WebSettings
+import android.webkit.WebStorage
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import android.widget.FrameLayout
+import androidx.activity.OnBackPressedCallback
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.graphics.Color as ComposeColor
+import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.ViewCompositionStrategy
+import androidx.core.content.ContextCompat
+import androidx.core.graphics.ColorUtils
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
+import androidx.core.view.updateLayoutParams
+import androidx.fragment.app.FragmentActivity
+import androidx.lifecycle.lifecycleScope
+import androidx.webkit.JavaScriptReplyProxy
+import androidx.webkit.ProfileStore
+import androidx.webkit.WebMessageCompat
+import androidx.webkit.WebSettingsCompat
+import androidx.webkit.WebViewCompat
+import androidx.webkit.WebViewFeature
+import com.webdroid.app.MainActivity
+import com.webdroid.app.R
+import com.webdroid.app.adblock.AdblockEngine
+import com.webdroid.app.adblock.RequestFilter
+import com.webdroid.app.data.AppSettings
+import com.webdroid.app.data.IconStore
+import com.webdroid.app.data.SiteMetadataFetcher
+import com.webdroid.app.data.VideoMode
+import com.webdroid.app.data.WebApp
+import com.webdroid.app.data.WebAppRepository
+import com.webdroid.app.data.WebAppSettings
+import com.webdroid.app.player.PlayerController
+import com.webdroid.app.player.PlayerOverlay
+import com.webdroid.app.player.VideoRequest
+import com.webdroid.app.ui.components.Haptics
+import com.webdroid.app.ui.theme.WebDroidTheme
+import com.webdroid.app.util.Net
+import com.webdroid.app.util.UrlUtils
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.doubleOrNull
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.contentOrNull
+import java.io.ByteArrayOutputStream
+import java.util.concurrent.atomic.AtomicInteger
+import kotlin.math.max
+
+/**
+ * One installed-feeling web app. Each app runs as its own document task, so
+ * it gets its own card (label, icon, colour) in Android's Recents.
+ */
+class WebAppActivity : FragmentActivity(), WebAppActions {
+
+    companion object {
+        fun intent(context: Context, appId: String): Intent =
+            Intent(Intent.ACTION_VIEW, Uri.parse("webdroid://app/$appId"), context, WebAppActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_DOCUMENT)
+
+        private const val LAST_URL_MAX_AGE_MS = 30 * 60 * 1000L
+    }
+
+    private val repo by lazy { WebAppRepository.get(this) }
+    private val json = Json { ignoreUnknownKeys = true }
+    private val ui = WebAppUiState()
+    private lateinit var player: PlayerController
+
+    private var app by mutableStateOf<WebApp?>(null)
+    private var icon by mutableStateOf<Bitmap?>(null)
+
+    private lateinit var root: FrameLayout
+    private lateinit var webContainer: FrameLayout
+    private lateinit var fullscreenContainer: FrameLayout
+    private var webView: WebDroidWebView? = null
+    private var popupWebView: WebView? = null
+
+    private val sniffer = MediaSniffer()
+    @Volatile private var documentUrl = ""
+    @Volatile private var adblockOn = true
+    private val blockedThisPage = AtomicInteger(0)
+
+    private var isolatedSupported = false
+    private var lockSupported = false
+    private var currentBarColor = Color.WHITE
+    private var barAnimator: ValueAnimator? = null
+    private var themeFromMeta = false
+
+    private var mainFrameReply: JavaScriptReplyProxy? = null
+    private var lastVideoReply: JavaScriptReplyProxy? = null
+    private var lastVideoAspect = 16f / 9f
+    private var pageMediaPlaying = false
+
+    private var customView: View? = null
+    private var customViewCallback: WebChromeClient.CustomViewCallback? = null
+
+    private var fileCallback: ValueCallback<Array<Uri>>? = null
+    private var pendingPermissionResult: ((Map<String, Boolean>) -> Unit)? = null
+    private val blobDownloads = HashMap<String, Pair<String, ByteArrayOutputStream>>()
+    private var unlocking = false
+    private var lastPullStage = 0
+
+    private val fileChooser = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        fileCallback?.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(result.resultCode, result.data))
+        fileCallback = null
+    }
+
+    private val permissionLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
+        pendingPermissionResult?.invoke(grants)
+        pendingPermissionResult = null
+    }
+
+    private val pipReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == PlayerController.ACTION_PIP_TOGGLE) player.togglePlay()
+        }
+    }
+
+    private val haptics by lazy { Haptics.of(window.decorView) }
+
+    /* ---------------------------------------------------------------------- */
+    /* Lifecycle                                                               */
+    /* ---------------------------------------------------------------------- */
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        val id = WebApp.idFromUri(intent?.data)
+        val loaded = id?.let { repo.get(it) }
+        if (loaded?.settings?.forceDark == true) setTheme(R.style.Theme_WebDroid_WebApp_Dark)
+        super.onCreate(savedInstanceState)
+        if (loaded == null) {
+            finishAndRemoveTask()
+            return
+        }
+        app = loaded
+        adblockOn = loaded.settings.adBlock && AppSettings.get(this).state.value.adBlockEnabled
+        AdblockEngine.init(this)
+
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        @Suppress("DEPRECATION")
+        run {
+            window.statusBarColor = Color.TRANSPARENT
+            window.navigationBarColor = Color.TRANSPARENT
+        }
+        if (Build.VERSION.SDK_INT >= 29) window.isNavigationBarContrastEnforced = false
+
+        isolatedSupported = WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE)
+        lockSupported = AppLock.isAvailable(this)
+        icon = IconStore.get(this).load(loaded.iconFile)
+        currentBarColor = loaded.themeColor ?: defaultBarColor()
+
+        player = PlayerController(this, lifecycleScope) { ShortcutHelper.launchIntent(this, app!!) }
+        player.onVisibilityChanged = { visible -> onPlayerVisibility(visible) }
+        player.onClosed = { request, position -> onPlayerClosed(request, position) }
+        player.onPipParamsChanged = { updatePipParams() }
+
+        buildViews()
+        applyBarColor(currentBarColor, animate = false)
+        updateTaskDescription()
+
+        createWebView()
+        val restored = savedInstanceState?.let { webView?.restoreState(it) } != null
+        if (!restored) webView?.loadUrl(startUrl(loaded))
+
+        if (loaded.settings.appLock && lockSupported) {
+            ui.locked = true
+            setRecentsScreenshotsAllowed(false)
+        }
+
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() = handleBack()
+        })
+
+        ContextCompat.registerReceiver(this, pipReceiver, IntentFilter(PlayerController.ACTION_PIP_TOGGLE), ContextCompat.RECEIVER_NOT_EXPORTED)
+
+        repo.markOpened(loaded.id)
+        ShortcutHelper.reportUsed(this, loaded)
+
+        lifecycleScope.launch {
+            repo.apps.collect { list ->
+                val updated = list.firstOrNull { it.id == loaded.id }
+                if (updated == null) {
+                    finishAndRemoveTask()
+                } else if (updated != app) {
+                    val previous = app
+                    app = updated
+                    if (previous != null) onSettingsChanged(previous, updated)
+                }
+            }
+        }
+
+        // Fallback if the page never reports a first paint.
+        lifecycleScope.launch {
+            delay(8000)
+            ui.splashVisible = false
+        }
+    }
+
+    private fun startUrl(app: WebApp): String {
+        val prefs = getSharedPreferences("last_urls", MODE_PRIVATE)
+        val last = prefs.getString(app.id, null)
+        val at = prefs.getLong("${app.id}_at", 0L)
+        return if (last != null && System.currentTimeMillis() - at < LAST_URL_MAX_AGE_MS && UrlUtils.sameSite(last, app.url)) last else app.url
+    }
+
+    private fun rememberUrl(url: String) {
+        val current = app ?: return
+        if (!url.startsWith("http")) return
+        getSharedPreferences("last_urls", MODE_PRIVATE).edit()
+            .putString(current.id, url)
+            .putLong("${current.id}_at", System.currentTimeMillis())
+            .apply()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        webView?.onResume()
+        if (ui.locked && !unlocking) unlock()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        CookieManager.getInstance().flush()
+        if (!pageMediaPlaying && !player.state.visible) webView?.onPause()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        player.onActivityStopped()
+        val current = app
+        if (current != null && current.settings.appLock && lockSupported && !isChangingConfigurations &&
+            !(Build.VERSION.SDK_INT >= 24 && isInPictureInPictureMode)
+        ) {
+            ui.locked = true
+        }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        webView?.saveState(outState)
+    }
+
+    override fun onDestroy() {
+        runCatching { unregisterReceiver(pipReceiver) }
+        if (::player.isInitialized && !isChangingConfigurations && player.state.visible) player.close()
+        popupWebView?.destroy()
+        popupWebView = null
+        webView?.let {
+            (it.parent as? ViewGroup)?.removeView(it)
+            it.destroy()
+        }
+        webView = null
+        super.onDestroy()
+    }
+
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        if (Build.VERSION.SDK_INT < 31 && player.state.visible && player.state.isPlaying) player.enterPip()
+    }
+
+    override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: Configuration) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        player.onPipModeChanged(isInPictureInPictureMode)
+        if (!isInPictureInPictureMode && lifecycle.currentState == androidx.lifecycle.Lifecycle.State.CREATED) {
+            // PiP window dismissed: stop unless background audio is wanted.
+            if (!AppSettings.get(this).state.value.backgroundPlay) player.exoPlayer?.pause()
+        }
+    }
+
+    private fun updatePipParams() {
+        if (Build.VERSION.SDK_INT >= 26) {
+            val params = player.pipParams() ?: return
+            runCatching { setPictureInPictureParams(params) }
+        }
+    }
+
+    /* ---------------------------------------------------------------------- */
+    /* Views                                                                   */
+    /* ---------------------------------------------------------------------- */
+
+    private fun buildViews() {
+        root = FrameLayout(this)
+        webContainer = FrameLayout(this)
+        fullscreenContainer = FrameLayout(this).apply { visibility = View.GONE }
+        val composeView = ComposeView(this).apply {
+            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
+            setContent {
+                WebDroidTheme {
+                    val current = app
+                    if (current != null) {
+                        WebAppOverlay(
+                            app = current,
+                            icon = icon,
+                            state = ui,
+                            actions = this@WebAppActivity,
+                            playerVisible = player.state.visible,
+                            isolatedSupported = isolatedSupported,
+                            lockSupported = lockSupported,
+                            player = {
+                                PlayerOverlay(
+                                    controller = player,
+                                    onDownload = { request -> downloadVideo(request) },
+                                    onPlayInPage = { request -> player.close(); ui.showToast("Playing in the page") ; lastVideoReply?.let { sendCommand(it, "{\"cmd\":\"resume\",\"id\":${request.frameVideoId ?: 0}}") } },
+                                )
+                            },
+                            popup = { PopupHost() },
+                        )
+                    }
+                }
+            }
+        }
+        root.addView(webContainer, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+        root.addView(fullscreenContainer, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+        root.addView(composeView, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+        setContentView(root)
+
+        ViewCompat.setOnApplyWindowInsetsListener(root) { _, insets ->
+            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
+            val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
+            val immersive = player.state.visible || ui.siteFullscreen
+            webContainer.updateLayoutParams<FrameLayout.LayoutParams> {
+                if (immersive) {
+                    setMargins(0, 0, 0, 0)
+                } else {
+                    setMargins(bars.left, bars.top, bars.right, max(bars.bottom, ime.bottom))
+                }
+            }
+            insets
+        }
+    }
+
+    @androidx.compose.runtime.Composable
+    private fun PopupHost() {
+        val popup = popupWebView ?: return
+        androidx.compose.ui.viewinterop.AndroidView(
+            factory = {
+                (popup.parent as? ViewGroup)?.removeView(popup)
+                popup
+            },
+            modifier = androidx.compose.ui.Modifier.fillMaxSize(),
+        )
+    }
+
+    private fun setImmersive(immersive: Boolean) {
+        val controller = WindowInsetsControllerCompat(window, root)
+        if (immersive) {
+            controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            controller.hide(WindowInsetsCompat.Type.systemBars())
+        } else {
+            controller.show(WindowInsetsCompat.Type.systemBars())
+        }
+        ViewCompat.requestApplyInsets(root)
+    }
+
+    private fun defaultBarColor(): Int {
+        val night = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
+        return if (night || app?.settings?.forceDark == true) 0xFF121212.toInt() else Color.WHITE
+    }
+
+    private fun applyBarColor(color: Int, animate: Boolean = true) {
+        val target = color or 0xFF000000.toInt()
+        barAnimator?.cancel()
+        if (!animate) {
+            root.setBackgroundColor(target)
+        } else {
+            barAnimator = ValueAnimator.ofObject(ArgbEvaluator(), currentBarColor, target).apply {
+                duration = 260
+                addUpdateListener { root.setBackgroundColor(it.animatedValue as Int) }
+                start()
+            }
+        }
+        currentBarColor = target
+        val light = ColorUtils.calculateLuminance(target) > 0.55
+        WindowInsetsControllerCompat(window, root).apply {
+            isAppearanceLightStatusBars = light
+            isAppearanceLightNavigationBars = light
+        }
+        ui.barColor = ComposeColor(target)
+        ui.lightBars = light
+    }
+
+    private fun updateTaskDescription() {
+        val current = app ?: return
+        val tile = IconStore.get(this).renderTile(current, 192)
+        val color = CardColorArgb.of(current.cardColor)
+        @Suppress("DEPRECATION")
+        setTaskDescription(ActivityManager.TaskDescription(current.name, tile, color))
+    }
+
+    private fun setRecentsScreenshotsAllowed(allowed: Boolean) {
+        if (Build.VERSION.SDK_INT >= 33) setRecentsScreenshotEnabled(allowed)
+    }
+
+    /* ---------------------------------------------------------------------- */
+    /* WebView                                                                 */
+    /* ---------------------------------------------------------------------- */
+
+    private fun cookieManager(): CookieManager {
+        val current = app
+        if (current != null && current.settings.isolatedSession && isolatedSupported) {
+            runCatching { return ProfileStore.getInstance().getOrCreateProfile(current.profileName).cookieManager }
+        }
+        return CookieManager.getInstance()
+    }
+
+    private fun userAgent(desktop: Boolean): String {
+        val base = WebSettings.getDefaultUserAgent(this)
+            .replace("; wv", "")
+            .replace(Regex(" Version/\\d+(\\.\\d+)*"), "")
+        if (!desktop) return base
+        val chrome = Regex("Chrome/[\\d.]+").find(base)?.value ?: "Chrome/141.0.0.0"
+        return "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) $chrome Safari/537.36"
+    }
+
+    @SuppressLint("SetJavaScriptEnabled", "RequiresFeature")
+    private fun configure(view: WebView, current: WebApp, isPopup: Boolean) {
+        if (current.settings.isolatedSession && isolatedSupported) {
+            runCatching {
+                ProfileStore.getInstance().getOrCreateProfile(current.profileName)
+                WebViewCompat.setProfile(view, current.profileName)
+            }
+        }
+        view.settings.apply {
+            javaScriptEnabled = true
+            domStorageEnabled = true
+            @Suppress("DEPRECATION")
+            databaseEnabled = true
+            mediaPlaybackRequiresUserGesture = true
+            allowFileAccess = false
+            allowContentAccess = true
+            javaScriptCanOpenWindowsAutomatically = true
+            setSupportMultipleWindows(!isPopup)
+            loadWithOverviewMode = true
+            useWideViewPort = true
+            builtInZoomControls = true
+            displayZoomControls = false
+            setSupportZoom(true)
+            mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+            userAgentString = userAgent(current.settings.desktopMode)
+            textZoom = 100
+            offscreenPreRaster = true
+            setGeolocationEnabled(true)
+        }
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.ALGORITHMIC_DARKENING)) {
+            WebSettingsCompat.setAlgorithmicDarkeningAllowed(view.settings, current.settings.forceDark)
+        }
+        cookieManager().setAcceptThirdPartyCookies(view, true)
+        view.overScrollMode = View.OVER_SCROLL_NEVER
+        view.isVerticalScrollBarEnabled = false
+        view.isHorizontalScrollBarEnabled = false
+        view.setBackgroundColor(if (current.settings.forceDark) 0xFF121212.toInt() else Color.WHITE)
+
+        val messageName = InjectedScript.messageBridgeName(this)
+        view.addJavascriptInterface(CosmeticBridge { adblockOn }, InjectedScript.cosmeticBridgeName(this))
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
+            WebViewCompat.addWebMessageListener(view, messageName, setOf("*")) { _, message, origin, isMainFrame, reply ->
+                onPageMessage(message, origin, isMainFrame, reply, isPopup)
+            }
+        }
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+            WebViewCompat.addDocumentStartJavaScript(view, InjectedScript.get(this), setOf("*"))
+        }
+
+        view.setDownloadListener { url, userAgent, contentDisposition, mimeType, _ ->
+            onDownload(url, userAgent, contentDisposition, mimeType)
+        }
+    }
+
+    private fun createWebView() {
+        val current = app ?: return
+        val view = WebDroidWebView(this)
+        configure(view, current, isPopup = false)
+        view.webViewClient = Client()
+        view.webChromeClient = Chrome()
+        view.pullCallbacks = PullHandler()
+        view.setOnLongClickListener { onLongPress(view) }
+        webContainer.addView(view, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+        webView = view
+    }
+
+    private fun recreateWebView(reloadUrl: String?) {
+        webView?.let {
+            webContainer.removeView(it)
+            it.destroy()
+        }
+        webView = null
+        createWebView()
+        webView?.loadUrl(reloadUrl ?: app?.url ?: return)
+    }
+
+    private fun hideSplash() {
+        if (ui.splashVisible) ui.splashVisible = false
+    }
+
+    private fun updateNavState() {
+        val view = webView ?: return
+        ui.canGoBack = view.canGoBack()
+        ui.canGoForward = view.canGoForward()
+    }
+
+    private inner class Client : WebViewClient() {
+        override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
+            sniffer.observe(request)
+            if (request.isForMainFrame) {
+                documentUrl = request.url.toString()
+                return null
+            }
+            if (!adblockOn) return null
+            if (!AdblockEngine.isReady && !AdblockEngine.awaitReady(1500)) return null
+            val response = RequestFilter.filter(applicationContext, request, documentUrl)
+            if (response != null) {
+                val count = blockedThisPage.incrementAndGet()
+                if (count % 4 == 1) runOnUiThread { ui.blockedCount = blockedThisPage.get() }
+            }
+            return response
+        }
+
+        override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+            val current = app ?: return false
+            val url = request.url.toString()
+            return when (ExternalNavigation.decide(current, request, ui.url)) {
+                ExternalNavigation.Decision.IN_APP -> false
+                ExternalNavigation.Decision.EXTERNAL -> {
+                    if (!ExternalNavigation.open(this@WebAppActivity, url)) view.loadUrl(url)
+                    true
+                }
+                ExternalNavigation.Decision.HANDLED -> {
+                    if (!ExternalNavigation.open(this@WebAppActivity, url)) ui.showToast("No app can open this link")
+                    true
+                }
+            }
+        }
+
+        override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
+            ui.url = url
+            documentUrl = url
+            ui.error = null
+            ui.videoOffer = null
+            blockedThisPage.set(0)
+            ui.blockedCount = 0
+            themeFromMeta = false
+            mainFrameReply = null
+            if (!WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+                view.evaluateJavascript(InjectedScript.get(this@WebAppActivity), null)
+            }
+            updateNavState()
+        }
+
+        override fun onPageCommitVisible(view: WebView, url: String) {
+            hideSplash()
+        }
+
+        override fun onPageFinished(view: WebView, url: String) {
+            hideSplash()
+            if (ui.pullPhase == PullPhase.REFRESHING) endRefresh()
+            updateNavState()
+            rememberUrl(url)
+            ui.blockedCount = blockedThisPage.get()
+        }
+
+        override fun doUpdateVisitedHistory(view: WebView, url: String, isReload: Boolean) {
+            ui.url = url
+            updateNavState()
+            rememberUrl(url)
+        }
+
+        override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
+            if (!request.isForMainFrame) return
+            val code = error.errorCode
+            if (code == ERROR_HOST_LOOKUP || code == ERROR_CONNECT || code == ERROR_TIMEOUT ||
+                code == ERROR_PROXY_AUTHENTICATION || code == ERROR_FAILED_SSL_HANDSHAKE || code == ERROR_IO
+            ) {
+                ui.error = PageError(
+                    request.url.toString(),
+                    when (code) {
+                        ERROR_HOST_LOOKUP -> "Check your connection and try again."
+                        ERROR_TIMEOUT -> "The site took too long to respond."
+                        ERROR_FAILED_SSL_HANDSHAKE -> "A secure connection couldn't be established."
+                        else -> error.description?.toString().orEmpty()
+                    },
+                )
+                hideSplash()
+                if (ui.pullPhase == PullPhase.REFRESHING) endRefresh()
+            }
+        }
+
+        override fun onRenderProcessGone(view: WebView, detail: android.webkit.RenderProcessGoneDetail): Boolean {
+            val url = ui.url.ifBlank { null }
+            if (view === webView) {
+                recreateWebView(url)
+                ui.showToast("Page reloaded")
+            } else {
+                closePopup()
+            }
+            return true
+        }
+    }
+
+    private inner class Chrome : WebChromeClient() {
+        override fun onProgressChanged(view: WebView, newProgress: Int) {
+            if (newProgress >= 85) hideSplash()
+        }
+
+        override fun onReceivedTitle(view: WebView, title: String?) {
+            ui.title = title.orEmpty()
+        }
+
+        override fun onShowCustomView(view: View, callback: CustomViewCallback) {
+            enterSiteFullscreen(view, callback)
+        }
+
+        override fun onHideCustomView() {
+            exitSiteFullscreen(fromPage = true)
+        }
+
+        override fun getDefaultVideoPoster(): Bitmap = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
+
+        override fun onShowFileChooser(
+            webView: WebView,
+            filePathCallback: ValueCallback<Array<Uri>>,
+            fileChooserParams: FileChooserParams,
+        ): Boolean {
+            fileCallback?.onReceiveValue(null)
+            fileCallback = filePathCallback
+            return try {
+                fileChooser.launch(fileChooserParams.createIntent())
+                true
+            } catch (e: Exception) {
+                try {
+                    fileChooser.launch(Intent(Intent.ACTION_GET_CONTENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*"))
+                    true
+                } catch (e2: Exception) {
+                    fileCallback = null
+                    false
+                }
+            }
+        }
+
+        override fun onPermissionRequest(request: PermissionRequest) {
+            runOnUiThread { handlePermissionRequest(request) }
+        }
+
+        override fun onPermissionRequestCanceled(request: PermissionRequest) {
+            val prompt = ui.permissionPrompt
+            if (prompt is PermissionPrompt.Media && prompt.request === request) ui.permissionPrompt = null
+        }
+
+        override fun onGeolocationPermissionsShowPrompt(origin: String, callback: GeolocationPermissions.Callback) {
+            val current = app ?: return callback.invoke(origin, false, false)
+            if ("location:$origin" in current.settings.grantedPermissions) {
+                withRuntimePermissions(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)) { granted ->
+                    callback.invoke(origin, granted, false)
+                }
+            } else {
+                ui.permissionPrompt = PermissionPrompt.Location(origin, callback)
+            }
+        }
+
+        override fun onCreateWindow(view: WebView, isDialog: Boolean, isUserGesture: Boolean, resultMsg: Message): Boolean {
+            return openPopup(resultMsg)
+        }
+
+        override fun onCloseWindow(window: WebView) {
+            if (window === popupWebView) closePopup()
+        }
+
+        override fun onJsAlert(view: WebView, url: String?, message: String?, result: JsResult): Boolean {
+            ui.jsDialog = JsDialog.Alert(message.orEmpty(), result)
+            return true
+        }
+
+        override fun onJsConfirm(view: WebView, url: String?, message: String?, result: JsResult): Boolean {
+            ui.jsDialog = JsDialog.Confirm(message.orEmpty(), result)
+            return true
+        }
+
+        override fun onJsPrompt(view: WebView, url: String?, message: String?, defaultValue: String?, result: JsPromptResult): Boolean {
+            ui.jsDialog = JsDialog.Prompt(message.orEmpty(), defaultValue.orEmpty(), result)
+            return true
+        }
+    }
+
+    /* ---------------------------------------------------------------------- */
+    /* Pull gestures                                                           */
+    /* ---------------------------------------------------------------------- */
+
+    private inner class PullHandler : WebDroidWebView.PullCallbacks {
+        private val density = resources.displayMetrics.density
+        private val refreshPx = PULL_REFRESH_DP * density
+        private val menuPx = PULL_MENU_DP * density
+
+        private fun resist(raw: Float): Float {
+            val max = 220 * density
+            return max * (1f - kotlin.math.exp(-raw / max))
+        }
+
+        override fun onPullStart() {
+            if (ui.pullPhase == PullPhase.REFRESHING) return
+            ui.pullPhase = PullPhase.PULLING
+            lastPullStage = 0
+        }
+
+        override fun onPull(distancePx: Float) {
+            if (ui.pullPhase != PullPhase.PULLING) return
+            val d = resist(distancePx)
+            ui.pullDistance = d
+            val stage = when {
+                d >= menuPx -> 2
+                d >= refreshPx -> 1
+                else -> 0
+            }
+            if (stage != lastPullStage) {
+                if (stage > lastPullStage) haptics.tick() else haptics.tap()
+                lastPullStage = stage
+            }
+        }
+
+        override fun onPullEnd(distancePx: Float) {
+            if (ui.pullPhase != PullPhase.PULLING) return
+            val d = resist(distancePx)
+            when {
+                d >= menuPx -> {
+                    haptics.confirm()
+                    animatePullTo(0f) { ui.pullPhase = PullPhase.IDLE }
+                    ui.menuOpen = true
+                }
+                d >= refreshPx -> {
+                    haptics.confirm()
+                    ui.pullPhase = PullPhase.REFRESHING
+                    ui.pullDistance = refreshPx
+                    webView?.reload()
+                    lifecycleScope.launch {
+                        delay(12_000)
+                        if (ui.pullPhase == PullPhase.REFRESHING) endRefresh()
+                    }
+                }
+                else -> animatePullTo(0f) { ui.pullPhase = PullPhase.IDLE }
+            }
+        }
+    }
+
+    private fun animatePullTo(target: Float, end: () -> Unit) {
+        ValueAnimator.ofFloat(ui.pullDistance, target).apply {
+            duration = 220
+            interpolator = android.view.animation.DecelerateInterpolator()
+            addUpdateListener { ui.pullDistance = it.animatedValue as Float }
+            addListener(object : android.animation.AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: android.animation.Animator) = end()
+            })
+            start()
+        }
+    }
+
+    private fun endRefresh() {
+        animatePullTo(0f) { ui.pullPhase = PullPhase.IDLE }
+    }
+
+    /* ---------------------------------------------------------------------- */
+    /* Page messages (theme colour, video, blob downloads)                     */
+    /* ---------------------------------------------------------------------- */
+
+    private fun onPageMessage(
+        message: WebMessageCompat,
+        origin: Uri,
+        isMainFrame: Boolean,
+        reply: JavaScriptReplyProxy,
+        fromPopup: Boolean,
+    ) {
+        val data = message.data ?: return
+        val obj = runCatching { json.parseToJsonElement(data).jsonObject }.getOrNull() ?: return
+        if (isMainFrame && !fromPopup) mainFrameReply = reply
+        when (obj.str("t")) {
+            "theme" -> if (isMainFrame && !fromPopup) onThemeColor(obj)
+            "video" -> if (!fromPopup) onVideoMessage(obj, reply)
+            "videoPause" -> pageMediaPlaying = false
+            "blob" -> onBlobChunk(obj)
+            "seeked" -> Unit
+        }
+    }
+
+    private fun JsonObject.str(key: String): String? = this[key]?.jsonPrimitive?.contentOrNull
+    private fun JsonObject.bool(key: String): Boolean = this[key]?.jsonPrimitive?.booleanOrNull == true
+    private fun JsonObject.num(key: String): Double = this[key]?.jsonPrimitive?.doubleOrNull ?: 0.0
+
+    private fun onThemeColor(obj: JsonObject) {
+        val meta = obj.bool("meta")
+        if (!meta && themeFromMeta) return
+        val raw = obj.str("color") ?: return
+        if (raw.startsWith("rgba") && raw.replace(" ", "").endsWith(",0)")) return
+        val color = SiteMetadataFetcher.parseColor(raw) ?: return
+        themeFromMeta = meta
+        applyBarColor(color)
+        val current = app
+        if (meta && current != null && current.themeColor != color) {
+            repo.update(current.id) { it.copy(themeColor = color) }
+        }
+    }
+
+    private fun sendCommand(reply: JavaScriptReplyProxy, command: String) {
+        runCatching { reply.postMessage(command) }
+    }
+
+    private fun onVideoMessage(obj: JsonObject, reply: JavaScriptReplyProxy) {
+        val current = app ?: return
+        val id = obj["id"]?.jsonPrimitive?.intOrNull ?: return
+        lastVideoReply = reply
+        val w = obj.num("w")
+        val h = obj.num("h")
+        if (w > 0 && h > 0) lastVideoAspect = (w / h).toFloat()
+        if (obj.str("event") != "play") return
+        pageMediaPlaying = true
+
+        val mode = current.settings.videoMode
+        if (mode == VideoMode.OFF || player.state.visible || ui.siteFullscreen) return
+        // Only user-started, reasonably large, non-looping videos (skip muted feed previews).
+        if (!obj.bool("gesture")) return
+        if (obj.bool("loop") && obj.bool("muted")) return
+        val area = obj.num("area")
+        val viewport = obj.num("viewport").coerceAtLeast(1.0)
+        if (area > 0 && area / viewport < 0.06) return
+
+        val request = resolveStream(obj, id) ?: return
+        when (mode) {
+            VideoMode.AUTO -> {
+                sendCommand(reply, "{\"cmd\":\"pause\",\"id\":$id}")
+                openPlayer(request)
+            }
+            VideoMode.BUTTON -> ui.videoOffer = VideoOffer(request, true)
+            VideoMode.OFF -> Unit
+        }
+    }
+
+    private fun resolveStream(obj: JsonObject, id: Int): VideoRequest? {
+        val current = app ?: return null
+        val src = obj.str("src").orEmpty()
+        val pageUrl = obj.str("pageUrl")?.takeIf { it.startsWith("http") } ?: ui.url
+        val (url, kind) = when {
+            src.startsWith("http") -> {
+                val lower = src.lowercase()
+                src to when {
+                    lower.contains(".m3u8") -> MediaSniffer.Kind.HLS
+                    lower.contains(".mpd") -> MediaSniffer.Kind.DASH
+                    else -> MediaSniffer.Kind.PROGRESSIVE
+                }
+            }
+            else -> {
+                val stream = sniffer.bestManifest(maxAgeMs = 10 * 60_000L) ?: sniffer.latestProgressive() ?: return null
+                stream.url to stream.kind
+            }
+        }
+        return VideoRequest(
+            url = url,
+            kind = kind,
+            title = obj.str("title")?.ifBlank { null } ?: ui.title,
+            pageUrl = pageUrl,
+            userAgent = webView?.settings?.userAgentString ?: Net.MOBILE_USER_AGENT,
+            cookies = runCatching { cookieManager().getCookie(url) }.getOrNull(),
+            posterUrl = obj.str("poster"),
+            appId = current.id,
+            appName = current.name,
+            frameVideoId = id,
+            startPositionMs = (obj.num("time") * 1000).toLong(),
+        )
+    }
+
+    private fun openPlayer(request: VideoRequest) {
+        ui.videoOffer = null
+        if (Build.VERSION.SDK_INT >= 33 && AppSettings.get(this).state.value.backgroundPlay &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED &&
+            !getSharedPreferences("webdroid", MODE_PRIVATE).getBoolean("asked_notifications", false)
+        ) {
+            getSharedPreferences("webdroid", MODE_PRIVATE).edit().putBoolean("asked_notifications", true).apply()
+            withRuntimePermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS)) { }
+        }
+        player.open(request)
+    }
+
+    private fun onPlayerVisibility(visible: Boolean) {
+        setImmersive(visible)
+        webView?.pullEnabled = !visible
+        if (visible) {
+            player.applyOrientation()
+            updatePipParams()
+        } else {
+            requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        }
+    }
+
+    private fun onPlayerClosed(request: VideoRequest, positionMs: Long) {
+        val id = request.frameVideoId ?: return
+        lastVideoReply?.let { sendCommand(it, "{\"cmd\":\"resume\",\"id\":$id,\"time\":${positionMs / 1000.0}}") }
+    }
+
+    private fun downloadVideo(request: VideoRequest) {
+        onDownload(request.url, request.userAgent, null, "video/mp4")
+    }
+
+    /* ---------------------------------------------------------------------- */
+    /* Site fullscreen with native gestures                                    */
+    /* ---------------------------------------------------------------------- */
+
+    private fun enterSiteFullscreen(view: View, callback: WebChromeClient.CustomViewCallback) {
+        if (customView != null) {
+            callback.onCustomViewHidden()
+            return
+        }
+        customView = view
+        customViewCallback = callback
+        val audio = getSystemService(AUDIO_SERVICE) as AudioManager
+        var volumeAcc = 0f
+        val layout = FullscreenGestureLayout(this, view, object : FullscreenGestureLayout.Callbacks {
+            override fun onBrightness(delta: Float): String {
+                val attrs = window.attributes
+                val currentValue = if (attrs.screenBrightness >= 0) attrs.screenBrightness else 0.5f
+                attrs.screenBrightness = (currentValue + delta).coerceIn(0.01f, 1f)
+                window.attributes = attrs
+                return "☀  ${(attrs.screenBrightness * 100).toInt()}%"
+            }
+
+            override fun onVolume(delta: Float): String {
+                val maxVolume = audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+                volumeAcc += delta * maxVolume
+                val steps = volumeAcc.toInt()
+                if (steps != 0) {
+                    volumeAcc -= steps
+                    audio.setStreamVolume(AudioManager.STREAM_MUSIC, (audio.getStreamVolume(AudioManager.STREAM_MUSIC) + steps).coerceIn(0, maxVolume), 0)
+                }
+                return "🔊  ${audio.getStreamVolume(AudioManager.STREAM_MUSIC) * 100 / maxVolume}%"
+            }
+
+            override fun onSeekPreview(seconds: Int): String =
+                (if (seconds >= 0) "+" else "−") + PlayerController.formatTime(kotlin.math.abs(seconds) * 1000L)
+
+            override fun onSeekCommit(seconds: Int) {
+                lastVideoReply?.let { sendCommand(it, "{\"cmd\":\"seekBy\",\"delta\":$seconds}") }
+            }
+        })
+        fullscreenContainer.addView(layout, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+        fullscreenContainer.visibility = View.VISIBLE
+        ui.siteFullscreen = true
+        webView?.pullEnabled = false
+        setImmersive(true)
+        if (AppSettings.get(this).state.value.autoRotate && lastVideoAspect >= 1.05f) {
+            requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        }
+    }
+
+    private fun exitSiteFullscreen(fromPage: Boolean) {
+        if (customView == null) return
+        fullscreenContainer.removeAllViews()
+        fullscreenContainer.visibility = View.GONE
+        customView = null
+        val callback = customViewCallback
+        customViewCallback = null
+        if (!fromPage) callback?.onCustomViewHidden()
+        ui.siteFullscreen = false
+        webView?.pullEnabled = true
+        setImmersive(false)
+        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        val attrs = window.attributes
+        attrs.screenBrightness = android.view.WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+        window.attributes = attrs
+    }
+
+    /* ---------------------------------------------------------------------- */
+    /* Popups                                                                  */
+    /* ---------------------------------------------------------------------- */
+
+    @SuppressLint("SetJavaScriptEnabled")
+    private fun openPopup(resultMsg: Message): Boolean {
+        val current = app ?: return false
+        closePopup()
+        val popup = WebView(this)
+        configure(popup, current, isPopup = true)
+        var decided = false
+        popup.webViewClient = object : WebViewClient() {
+            fun decide(url: String): Boolean {
+                if (decided) return false
+                decided = true
+                return when {
+                    UrlUtils.sameSite(url, current.url) && !ExternalNavigation.isAuthHost(url) -> {
+                        // target=_blank within the same site: stay in the app window, no tabs.
+                        webView?.loadUrl(url)
+                        closePopup()
+                        true
+                    }
+                    ExternalNavigation.isAuthHost(url) || !current.settings.openLinksExternally -> {
+                        ui.popupTitle = UrlUtils.displayHost(url)
+                        ui.popupOpen = true
+                        false
+                    }
+                    else -> {
+                        if (!ExternalNavigation.open(this@WebAppActivity, url)) {
+                            ui.popupTitle = UrlUtils.displayHost(url)
+                            ui.popupOpen = true
+                            return false
+                        }
+                        closePopup()
+                        true
+                    }
+                }
+            }
+
+            override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+                val url = request.url.toString()
+                if (!url.startsWith("http")) {
+                    ExternalNavigation.open(this@WebAppActivity, url)
+                    return true
+                }
+                return decide(url)
+            }
+
+            override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
+                if (url.startsWith("http") && !decided) decide(url)
+                if (ui.popupOpen) ui.popupTitle = UrlUtils.displayHost(url)
+            }
+
+            override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
+                if (!adblockOn || request.isForMainFrame || !AdblockEngine.isReady) return null
+                return RequestFilter.filter(applicationContext, request, request.requestHeaders["Referer"] ?: documentUrl)
+            }
+        }
+        popup.webChromeClient = object : WebChromeClient() {
+            override fun onCloseWindow(window: WebView) = closePopup()
+            override fun onReceivedTitle(view: WebView, title: String?) {
+                if (!title.isNullOrBlank() && ui.popupOpen) ui.popupTitle = title
+            }
+        }
+        popupWebView = popup
+        val transport = resultMsg.obj as? WebView.WebViewTransport ?: return false
+        transport.webView = popup
+        resultMsg.sendToTarget()
+        return true
+    }
+
+    override fun closePopup() {
+        val popup = popupWebView ?: return
+        ui.popupOpen = false
+        popupWebView = null
+        lifecycleScope.launch {
+            delay(350)
+            (popup.parent as? ViewGroup)?.removeView(popup)
+            popup.destroy()
+        }
+    }
+
+    /* ---------------------------------------------------------------------- */
+    /* Permissions                                                             */
+    /* ---------------------------------------------------------------------- */
+
+    private fun withRuntimePermissions(permissions: Array<String>, result: (Boolean) -> Unit) {
+        val missing = permissions.filter { ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }
+        if (missing.isEmpty()) {
+            result(true)
+            return
+        }
+        pendingPermissionResult = { grants -> result(grants.values.any { it }) }
+        permissionLauncher.launch(missing.toTypedArray())
+    }
+
+    private fun handlePermissionRequest(request: PermissionRequest) {
+        val current = app ?: return request.deny()
+        val resources = request.resources.toSet()
+        val camera = PermissionRequest.RESOURCE_VIDEO_CAPTURE in resources
+        val mic = PermissionRequest.RESOURCE_AUDIO_CAPTURE in resources
+        if (!camera && !mic) {
+            if (PermissionRequest.RESOURCE_PROTECTED_MEDIA_ID in resources) {
+                request.grant(arrayOf(PermissionRequest.RESOURCE_PROTECTED_MEDIA_ID))
+            } else {
+                request.deny()
+            }
+            return
+        }
+        val origin = request.origin.toString()
+        val granted = (!camera || "camera:$origin" in current.settings.grantedPermissions) &&
+            (!mic || "mic:$origin" in current.settings.grantedPermissions)
+        if (granted) grantMedia(request, camera, mic) else ui.permissionPrompt = PermissionPrompt.Media(origin, request, camera, mic)
+    }
+
+    private fun grantMedia(request: PermissionRequest, camera: Boolean, mic: Boolean) {
+        val needed = buildList {
+            if (camera) add(Manifest.permission.CAMERA)
+            if (mic) add(Manifest.permission.RECORD_AUDIO)
+        }.toTypedArray()
+        withRuntimePermissions(needed) {
+            val allowed = buildList {
+                if (camera && ContextCompat.checkSelfPermission(this@WebAppActivity, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+                    add(PermissionRequest.RESOURCE_VIDEO_CAPTURE)
+                }
+                if (mic && ContextCompat.checkSelfPermission(this@WebAppActivity, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+                    add(PermissionRequest.RESOURCE_AUDIO_CAPTURE)
+                }
+            }
+            if (allowed.isEmpty()) request.deny() else request.grant(allowed.toTypedArray())
+        }
+    }
+
+    override fun answerPermission(allow: Boolean) {
+        val prompt = ui.permissionPrompt ?: return
+        ui.permissionPrompt = null
+        val current = app ?: return
+        when (prompt) {
+            is PermissionPrompt.Media -> {
+                if (!allow) {
+                    prompt.request.deny()
+                    return
+                }
+                val keys = buildSet {
+                    if (prompt.camera) add("camera:${prompt.origin}")
+                    if (prompt.mic) add("mic:${prompt.origin}")
+                }
+                repo.update(current.id) { it.copy(settings = it.settings.copy(grantedPermissions = it.settings.grantedPermissions + keys)) }
+                grantMedia(prompt.request, prompt.camera, prompt.mic)
+            }
+            is PermissionPrompt.Location -> {
+                if (!allow) {
+                    prompt.callback.invoke(prompt.origin, false, false)
+                    return
+                }
+                repo.update(current.id) { it.copy(settings = it.settings.copy(grantedPermissions = it.settings.grantedPermissions + "location:${prompt.origin}")) }
+                withRuntimePermissions(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)) { granted ->
+                    prompt.callback.invoke(prompt.origin, granted, false)
+                }
+            }
+        }
+    }
+
+    override fun answerJs(confirmed: Boolean, text: String?) {
+        val dialog = ui.jsDialog ?: return
+        ui.jsDialog = null
+        when (dialog) {
+            is JsDialog.Alert -> dialog.result.confirm()
+            is JsDialog.Confirm -> if (confirmed) dialog.result.confirm() else dialog.result.cancel()
+            is JsDialog.Prompt -> if (confirmed) dialog.result.confirm(text.orEmpty()) else dialog.result.cancel()
+        }
+    }
+
+    /* ---------------------------------------------------------------------- */
+    /* Downloads                                                               */
+    /* ---------------------------------------------------------------------- */
+
+    private fun onDownload(url: String, userAgent: String?, contentDisposition: String?, mimeType: String?) {
+        when {
+            url.startsWith("data:") -> {
+                val (mime, bytes) = DownloadHelper.decodeDataUrl(url) ?: return
+                val name = DownloadHelper.fileName("download", null, mime)
+                saveDownloadedBytes(name, mime, bytes)
+            }
+            url.startsWith("blob:") -> {
+                val reply = mainFrameReply ?: lastVideoReply ?: run {
+                    ui.showToast("This download can't be saved")
+                    return
+                }
+                val id = System.nanoTime().toString()
+                blobDownloads[id] = DownloadHelper.fileName(url, contentDisposition, mimeType) to ByteArrayOutputStream()
+                sendCommand(reply, "{\"cmd\":\"blob\",\"url\":${kotlinx.serialization.json.JsonPrimitive(url)},\"id\":\"$id\"}")
+                ui.showToast("Preparing download…")
+            }
+            url.startsWith("http") -> {
+                val start = {
+                    runCatching {
+                        DownloadHelper.enqueue(this, url, userAgent, contentDisposition, mimeType, ui.url, cookieManager())
+                    }.onSuccess { ui.showToast("Downloading $it") }
+                        .onFailure { ui.showToast("Download failed") }
+                }
+                if (Build.VERSION.SDK_INT <= 28) {
+                    withRuntimePermissions(arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE)) { granted ->
+                        if (granted) start() else ui.showToast("Storage permission needed to download")
+                    }
+                } else {
+                    start()
+                }
+            }
+        }
+    }
+
+    private fun onBlobChunk(obj: JsonObject) {
+        val id = obj.str("id") ?: return
+        val entry = blobDownloads[id] ?: return
+        if (obj.str("error") != null) {
+            blobDownloads.remove(id)
+            ui.showToast("Download failed")
+            return
+        }
+        obj.str("chunk")?.let { entry.second.write(Base64.decode(it, Base64.DEFAULT)) }
+        if (obj.bool("done")) {
+            blobDownloads.remove(id)
+            val mime = obj.str("mime")
+            var name = entry.first
+            if (!name.contains('.') && mime != null) {
+                android.webkit.MimeTypeMap.getSingleton().getExtensionFromMimeType(mime)?.let { name = "$name.$it" }
+            }
+            saveDownloadedBytes(name, mime, entry.second.toByteArray())
+        }
+    }
+
+    private fun saveDownloadedBytes(name: String, mime: String?, bytes: ByteArray) {
+        lifecycleScope.launch {
+            val uri = withContext(Dispatchers.IO) { runCatching { DownloadHelper.saveBytes(this@WebAppActivity, name, mime, bytes) }.getOrNull() }
+            ui.showToast(if (uri != null) "Saved $name to Downloads" else "Download failed")
+        }
+    }
+
+    /* ---------------------------------------------------------------------- */
+    /* Long press                                                              */
+    /* ---------------------------------------------------------------------- */
+
+    private fun onLongPress(view: WebView): Boolean {
+        val result = view.hitTestResult
+        val extra = result.extra ?: return false
+        val menu = when (result.type) {
+            WebView.HitTestResult.SRC_ANCHOR_TYPE -> LinkMenu(extra, null, null)
+            WebView.HitTestResult.SRC_IMAGE_ANCHOR_TYPE -> {
+                val message = Handler(Looper.getMainLooper()).obtainMessage()
+                view.requestFocusNodeHref(message)
+                val href = message.data.getString("url")?.takeIf { it.isNotBlank() } ?: extra
+                LinkMenu(href, extra, message.data.getString("title"))
+            }
+            WebView.HitTestResult.IMAGE_TYPE -> if (extra.startsWith("http")) LinkMenu(extra, extra, null) else return false
+            else -> return false
+        }
+        haptics.longPress()
+        ui.linkMenu = menu
+        return true
+    }
+
+    /* ---------------------------------------------------------------------- */
+    /* Settings changes                                                        */
+    /* ---------------------------------------------------------------------- */
+
+    private fun onSettingsChanged(old: WebApp, new: WebApp) {
+        val o = old.settings
+        val n = new.settings
+        val view = webView
+        if (o.adBlock != n.adBlock) {
+            adblockOn = n.adBlock && AppSettings.get(this).state.value.adBlockEnabled
+            ui.showToast(if (n.adBlock) "Ad blocking on" else "Ad blocking off")
+            view?.reload()
+        }
+        if (o.desktopMode != n.desktopMode && view != null) {
+            view.settings.userAgentString = userAgent(n.desktopMode)
+            view.reload()
+        }
+        if (o.forceDark != n.forceDark) {
+            recreate()
+            return
+        }
+        if (o.isolatedSession != n.isolatedSession) ui.showToast("Applies the next time you open ${new.name}")
+        if (o.appLock != n.appLock) setRecentsScreenshotsAllowed(!n.appLock)
+        if (old.iconFile != new.iconFile) icon = IconStore.get(this).load(new.iconFile)
+        if (old.name != new.name || old.cardColor != new.cardColor || old.iconFile != new.iconFile) {
+            updateTaskDescription()
+            ShortcutHelper.refresh(this, new)
+        }
+    }
+
+    /* ---------------------------------------------------------------------- */
+    /* Back                                                                    */
+    /* ---------------------------------------------------------------------- */
+
+    private fun handleBack() {
+        when {
+            ui.locked -> moveTaskToBack(true)
+            player.state.visible -> player.close()
+            customView != null -> exitSiteFullscreen(fromPage = false)
+            ui.jsDialog != null -> answerJs(false, null)
+            ui.permissionPrompt != null -> answerPermission(false)
+            ui.linkMenu != null -> ui.linkMenu = null
+            ui.settingsOpen -> ui.settingsOpen = false
+            ui.menuOpen -> ui.menuOpen = false
+            ui.popupOpen -> {
+                val popup = popupWebView
+                if (popup != null && popup.canGoBack()) popup.goBack() else closePopup()
+            }
+            ui.toolbarExpanded -> ui.toolbarExpanded = false
+            ui.videoOffer != null -> ui.videoOffer = null
+            webView?.canGoBack() == true -> webView?.goBack()
+            else -> moveTaskToBack(true)
+        }
+    }
+
+    /* ---------------------------------------------------------------------- */
+    /* WebAppActions                                                           */
+    /* ---------------------------------------------------------------------- */
+
+    override fun back() {
+        webView?.takeIf { it.canGoBack() }?.goBack()
+    }
+
+    override fun forward() {
+        webView?.takeIf { it.canGoForward() }?.goForward()
+    }
+
+    override fun reload() {
+        ui.error = null
+        webView?.reload()
+    }
+
+    override fun home() {
+        app?.let { webView?.loadUrl(it.url) }
+    }
+
+    override fun share() {
+        val text = ui.url.ifBlank { app?.url.orEmpty() }
+        val intent = Intent(Intent.ACTION_SEND).setType("text/plain")
+            .putExtra(Intent.EXTRA_TEXT, text)
+            .putExtra(Intent.EXTRA_SUBJECT, ui.title)
+        startActivity(Intent.createChooser(intent, null))
+    }
+
+    override fun copyLink() = copyText(ui.url.ifBlank { app?.url.orEmpty() })
+
+    override fun openInBrowser() {
+        if (!ExternalNavigation.open(this, ui.url.ifBlank { app?.url.orEmpty() })) ui.showToast("No browser found")
+    }
+
+    override fun closeApp() {
+        if (player.state.visible) player.close()
+        finishAndRemoveTask()
+    }
+
+    override fun addToHomeScreen() {
+        val current = app ?: return
+        if (!ShortcutHelper.pin(this, current)) ui.showToast("Your launcher doesn't support shortcuts")
+    }
+
+    override fun editApp() {
+        val current = app ?: return
+        startActivity(
+            Intent(this, MainActivity::class.java)
+                .putExtra(MainActivity.EXTRA_EDIT_APP, current.id)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        )
+    }
+
+    override fun clearSiteData() {
+        val current = app ?: return
+        val view = webView ?: return
+        if (current.settings.isolatedSession && isolatedSupported) {
+            runCatching {
+                val profile = ProfileStore.getInstance().getOrCreateProfile(current.profileName)
+                profile.cookieManager.removeAllCookies(null)
+                profile.webStorage.deleteAllData()
+            }
+        } else {
+            val manager = CookieManager.getInstance()
+            val site = UrlUtils.siteOf(current.url)
+            listOf(current.url, ui.url).filter { it.startsWith("http") }.forEach { url ->
+                manager.getCookie(url)?.split(';')?.forEach { cookie ->
+                    val name = cookie.substringBefore('=').trim()
+                    if (name.isNotEmpty()) {
+                        manager.setCookie(url, "$name=; Max-Age=0; Path=/")
+                        if (site != null) manager.setCookie(url, "$name=; Max-Age=0; Path=/; Domain=.$site")
+                    }
+                }
+                val uri = Uri.parse(url)
+                WebStorage.getInstance().deleteOrigin("${uri.scheme}://${uri.host}")
+            }
+            manager.flush()
+        }
+        view.clearCache(true)
+        view.clearHistory()
+        view.loadUrl(current.url)
+        ui.showToast("Site data cleared")
+    }
+
+    override fun updateSettings(transform: (WebAppSettings) -> WebAppSettings) {
+        val current = app ?: return
+        repo.update(current.id) { it.copy(settings = transform(it.settings)) }
+    }
+
+    override fun openLink(url: String) {
+        webView?.loadUrl(url)
+    }
+
+    override fun openLinkExternally(url: String) {
+        if (!ExternalNavigation.open(this, url)) ui.showToast("No app can open this link")
+    }
+
+    override fun copyText(text: String) {
+        val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText("link", text))
+        if (Build.VERSION.SDK_INT < 33) ui.showToast("Copied")
+    }
+
+    override fun shareText(text: String) {
+        startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text), null))
+    }
+
+    override fun download(url: String) {
+        onDownload(url, webView?.settings?.userAgentString, null, null)
+    }
+
+    override fun retry() {
+        ui.error = null
+        webView?.reload()
+    }
+
+    override fun playOffer() {
+        val offer = ui.videoOffer ?: return
+        ui.videoOffer = null
+        offer.request.frameVideoId?.let { id -> lastVideoReply?.let { sendCommand(it, "{\"cmd\":\"pause\",\"id\":$id}") } }
+        openPlayer(offer.request)
+    }
+
+    override fun dismissOffer() {
+        ui.videoOffer = null
+    }
+
+    override fun unlock() {
+        val current = app ?: return
+        if (unlocking) return
+        unlocking = true
+        AppLock.prompt(this, current.name) {
+            ui.locked = false
+            unlocking = false
+        }
+        lifecycleScope.launch {
+            // The prompt may be dismissed without a callback; allow retrying.
+            delay(1500)
+            unlocking = false
+        }
+    }
+}
+
+/** Card colours as ARGB ints for platform APIs. */
+private object CardColorArgb {
+    fun of(index: Int): Int = when (Math.floorMod(index, 6)) {
+        0 -> 0xFFFF4D8B.toInt()
+        1 -> 0xFF1A3A3A.toInt()
+        2 -> 0xFFB8A4ED.toInt()
+        3 -> 0xFFFFB084.toInt()
+        4 -> 0xFFE8B94A.toInt()
+        else -> 0xFFF5F0E0.toInt()
+    }
+}
+
