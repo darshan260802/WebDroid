@@ -13,9 +13,12 @@ val gitCommitCount: Int = runCatching {
         .standardOutput.asText.get().trim().toInt()
 }.getOrDefault(1)
 
+// The VERSION file drives releases: CI publishes v<VERSION> the first time it
+// builds a commit carrying a version that has no release yet.
 val appVersionName: String = System.getenv("WEBDROID_VERSION_NAME")
     ?.removePrefix("v")
     ?.takeIf { it.isNotBlank() }
+    ?: rootProject.file("VERSION").takeIf { it.exists() }?.readText()?.trim()?.takeIf { it.isNotBlank() }
     ?: "0.1.0-dev.$gitCommitCount"
 
 val releaseKeystore = System.getenv("WEBDROID_KEYSTORE_PATH")?.let { file(it) }

@@ -52,7 +52,7 @@ cd tools/adblock && npm ci && node build.mjs && node test.mjs
 cd ../.. && ./gradlew assembleRelease
 ```
 
-GitHub Actions builds a signed APK on every push. Pushing a `v*` tag publishes a GitHub release. Release signing reads the `WEBDROID_KEYSTORE_B64` repository secret.
+GitHub Actions builds a signed APK on every push. To publish a release, change the version in [`VERSION`](VERSION) (and optionally add `release-notes/v<version>.md`), then push. CI creates the `v<version>` tag and the GitHub release with the APK. Pushing a `v*` tag also works. Release signing reads the `WEBDROID_KEYSTORE_B64` repository secret.
 
 ## License
 

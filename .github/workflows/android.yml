@@ -64,8 +64,12 @@ jobs:
       - name: Set version
         run: |
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            echo "WEBDROID_VERSION_NAME=${GITHUB_REF_NAME}" >> "$GITHUB_ENV"
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="$(cat VERSION)"
           fi
+          echo "WEBDROID_VERSION_NAME=${VERSION}" >> "$GITHUB_ENV"
+          echo "RELEASE_TAG=v${VERSION}" >> "$GITHUB_ENV"
 
       - name: Assemble release APK
         shell: bash
@@ -83,7 +87,7 @@ jobs:
         run: |
           mkdir -p dist
           SRC=$(ls app/build/outputs/apk/release/*.apk | head -1)
-          NAME="WebDroid-${WEBDROID_VERSION_NAME:-dev-$(git rev-parse --short HEAD)}.apk"
+          NAME="WebDroid-v${WEBDROID_VERSION_NAME}.apk"
           cp "$SRC" "dist/$NAME"
           echo "name=$NAME" >> "$GITHUB_OUTPUT"
           ls -la dist
@@ -95,17 +99,26 @@ jobs:
           if-no-files-found: error
 
       - name: Publish GitHub release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/v') || github.ref_type == 'branch')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "Release $RELEASE_TAG already exists; nothing to publish"
+            exit 0
+          fi
+          if [ -z "${KEYSTORE_PRESENT:-}" ] && [ ! -f keystore/release.jks ]; then
+            echo "::warning::Not publishing $RELEASE_TAG without the release signing key"
+            exit 0
+          fi
           NOTES_FILE=$(mktemp)
-          if [ -f "release-notes/${GITHUB_REF_NAME}.md" ]; then
-            cp "release-notes/${GITHUB_REF_NAME}.md" "$NOTES_FILE"
+          if [ -f "release-notes/${RELEASE_TAG}.md" ]; then
+            cp "release-notes/${RELEASE_TAG}.md" "$NOTES_FILE"
           else
             git log -1 --pretty=%B > "$NOTES_FILE"
           fi
-          gh release create "$GITHUB_REF_NAME" dist/*.apk \
-            --title "WebDroid ${GITHUB_REF_NAME}" \
+          gh release create "$RELEASE_TAG" dist/*.apk \
+            --target "$GITHUB_SHA" \
+            --title "WebDroid ${RELEASE_TAG}" \
             --notes-file "$NOTES_FILE" \
             --latest
