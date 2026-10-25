@@ -326,7 +326,23 @@ fun SettingsScreen(
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
                 Text("Made with", style = ClayType.Caption, color = Clay.MutedSoft)
                 Icon(Icons.Rounded.Favorite, null, tint = Clay.Pink, modifier = Modifier.padding(horizontal = 4.dp).size(14.dp))
-                Text("· Jay Shree Ganesha", style = ClayType.Caption, color = Clay.MutedSoft)
+                Text(
+                    "Darshan Patel",
+                    style = ClayType.Caption.copy(fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold),
+                    color = Clay.Ink,
+                    textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline,
+                    modifier = Modifier
+                        .clip(ClayShapes.Xs)
+                        .clickable {
+                            runCatching {
+                                context.startActivity(
+                                    Intent(Intent.ACTION_VIEW, Uri.parse("https://www.linkedin.com/in/darshan-patel-2608"))
+                                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                )
+                            }
+                        }
+                        .padding(horizontal = 2.dp, vertical = 6.dp),
+                )
             }
         }
     }
