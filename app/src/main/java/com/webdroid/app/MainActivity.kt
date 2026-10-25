@@ -307,6 +307,7 @@ class MainActivity : ComponentActivity() {
         repo.delete(app.id)
         ShortcutHelper.remove(this, app)
         com.webdroid.app.web.WebNotifier.deleteChannel(this, app)
+        com.webdroid.app.vpn.VpnManager.forget(this, app.id)
         lifecycleScope.launch(Dispatchers.IO) {
             icons.delete(app.id)
             getSharedPreferences("last_urls", MODE_PRIVATE).edit().remove(app.id).apply()

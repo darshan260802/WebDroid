@@ -244,6 +244,14 @@ fun SettingsScreen(
             }
 
             Spacer(Modifier.height(26.dp))
+            SectionLabel("VPN")
+            Text(
+                "Send chosen web apps through Tor, a WireGuard config or a proxy. Only those apps' sites use it; pick one per app in its settings.",
+                style = ClayType.Caption, color = Clay.Muted, modifier = Modifier.padding(top = 4.dp, bottom = 10.dp),
+            )
+            VpnSettingsSection()
+
+            Spacer(Modifier.height(26.dp))
             SectionLabel("Background & notifications")
             Spacer(Modifier.height(8.dp))
             val power = context.getSystemService(android.content.Context.POWER_SERVICE) as android.os.PowerManager

@@ -36,6 +36,8 @@ android {
         versionCode = gitCommitCount
         versionName = appVersionName
         vectorDrawables.useSupportLibrary = true
+        // The ABIs Tor and the VPN core are built for.
+        ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64") }
         // OTA updates come from this repository's GitHub releases.
         val updateRepo = System.getenv("GITHUB_REPOSITORY")?.takeIf { it.isNotBlank() } ?: "darshan260802/WebDroid"
         buildConfigField("String", "UPDATE_REPO", "\"$updateRepo\"")
@@ -76,6 +78,8 @@ android {
     }
 
     packaging {
+        // Compressed native libraries keep the download (and OTA updates) small.
+        jniLibs { useLegacyPackaging = true }
         resources {
             excludes += setOf(
                 "/META-INF/{AL2.0,LGPL2.1}",
@@ -134,4 +138,9 @@ dependencies {
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.zipline.android)
+    implementation(libs.tor.android)
+    implementation(libs.androidx.localbroadcastmanager)
+    // Per-site VPN core (Go: WireGuard netstack + router), built by
+    // tools/vpncore/build.sh with gomobile.
+    implementation(files("libs/vpncore.aar"))
 }

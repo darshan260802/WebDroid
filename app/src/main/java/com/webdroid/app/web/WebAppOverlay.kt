@@ -70,6 +70,7 @@ import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.Menu
 import androidx.compose.material.icons.rounded.Notifications
 import androidx.compose.material.icons.rounded.NotificationsActive
+import androidx.compose.material.icons.rounded.VpnLock
 import androidx.compose.material.icons.rounded.Wifi
 import androidx.compose.material.icons.rounded.MoreHoriz
 import androidx.compose.material.icons.rounded.PlayArrow
@@ -184,6 +185,7 @@ fun WebAppOverlay(
         }
 
         Splash(app, icon, cardColor, state.splashVisible)
+        VpnStatusPill(state)
 
         // Popup windows (e.g. sign-in) slide up as a card.
         AnimatedVisibility(
@@ -671,6 +673,12 @@ private fun BoxScope.MenuSheet(app: WebApp, icon: Bitmap?, state: WebAppUiState,
             { enabled -> actions.updateSettings { it.copy(adBlock = enabled) } },
             icon = Icons.Rounded.Shield,
         )
+        val vpnLabel = com.webdroid.app.vpn.VpnProfiles.get(androidx.compose.ui.platform.LocalContext.current).label(app.settings.vpn)
+        MenuRow(
+            Icons.Rounded.VpnLock,
+            "VPN",
+            state.vpnStatus ?: vpnLabel?.let { "This app goes through $it" } ?: "Off · connects directly",
+        ) { state.menuOpen = false; state.settingsOpen = true }
         Spacer(Modifier.height(8.dp))
         SectionLabel("Video player")
         Spacer(Modifier.height(8.dp))
@@ -685,6 +693,34 @@ private fun BoxScope.MenuSheet(app: WebApp, icon: Bitmap?, state: WebAppUiState,
         MenuRow(Icons.Rounded.Settings, "App settings") { state.menuOpen = false; state.settingsOpen = true }
         MenuRow(Icons.Rounded.AddToHomeScreen, "Add to home screen") { close(); actions.addToHomeScreen() }
         MenuRow(Icons.Rounded.PowerSettingsNew, "Close app", tint = Clay.Error) { close(); actions.closeApp() }
+    }
+}
+
+/** Tor bootstrap progress (or a VPN error) while the page waits for it. */
+@Composable
+private fun BoxScope.VpnStatusPill(state: WebAppUiState) {
+    val status = state.vpnStatus
+    // Keep the last text while the pill animates away.
+    val shown = remember { arrayOf("") }
+    if (status != null) shown[0] = status
+    AnimatedVisibility(
+        visible = status != null,
+        enter = slideInVertically(ClayMotion.offsetBouncy) { -it } + fadeIn(),
+        exit = slideOutVertically { -it } + fadeOut(),
+        modifier = Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = 12.dp),
+    ) {
+        Row(
+            Modifier
+                .shadow(10.dp, ClayShapes.Pill)
+                .clip(ClayShapes.Pill)
+                .background(Clay.Primary)
+                .padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(Icons.Rounded.VpnLock, null, tint = Clay.OnPrimary, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(8.dp))
+            Text(shown[0], style = ClayType.Caption, color = Clay.OnPrimary)
+        }
     }
 }
 
@@ -748,6 +784,11 @@ private fun BoxScope.SettingsSheet(
             app.settings.keepAlive, { v -> actions.updateSettings { it.copy(keepAlive = v) } },
             icon = Icons.Rounded.Wifi,
         )
+        HairlineDivider(Modifier.padding(vertical = 6.dp))
+        SectionLabel("VPN")
+        Spacer(Modifier.height(10.dp))
+        com.webdroid.app.ui.components.VpnPicker(app.settings.vpn, { choice -> actions.updateSettings { it.copy(vpn = choice) } })
+        Spacer(Modifier.height(6.dp))
         MenuRow(Icons.Rounded.Settings, "Sound & notification style") { close(); actions.openNotificationSettings() }
         HairlineDivider(Modifier.padding(vertical = 6.dp))
         MenuRow(Icons.Rounded.Edit, "Edit name, icon and colour") { close(); actions.editApp() }

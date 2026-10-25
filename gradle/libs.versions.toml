@@ -16,8 +16,12 @@ serialization = "1.9.0"
 coroutines = "1.10.2"
 zipline = "1.24.0"
 palette = "1.0.0"
+torAndroid = "0.4.9.14"
+localbroadcastmanager = "1.1.0"
 
 [libraries]
+tor-android = { group = "info.guardianproject", name = "tor-android", version.ref = "torAndroid" }
+androidx-localbroadcastmanager = { group = "androidx.localbroadcastmanager", name = "localbroadcastmanager", version.ref = "localbroadcastmanager" }
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
 androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
 androidx-lifecycle-runtime-compose = { group = "androidx.lifecycle", name = "lifecycle-runtime-compose", version.ref = "lifecycle" }

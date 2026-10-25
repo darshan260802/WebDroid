@@ -20,3 +20,8 @@ tools/adblock/node_modules/
 tools/adblock/.cache/
 tools/adblock/build/
 dist-local/
+
+# Built in CI: VPN core (gomobile) and Tor's GeoIP data
+/app/libs/vpncore*.aar
+/app/libs/vpncore*.jar
+/app/src/main/assets/tor/

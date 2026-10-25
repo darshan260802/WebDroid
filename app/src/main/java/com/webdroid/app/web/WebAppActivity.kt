@@ -80,6 +80,9 @@ import com.webdroid.app.data.WebAppSettings
 import com.webdroid.app.player.PlayerController
 import com.webdroid.app.player.PlayerOverlay
 import com.webdroid.app.player.VideoRequest
+import com.webdroid.app.vpn.TorController
+import com.webdroid.app.vpn.VpnManager
+import com.webdroid.app.vpn.VpnProfiles
 import com.webdroid.app.ui.components.Haptics
 import com.webdroid.app.ui.theme.WebDroidTheme
 import com.webdroid.app.util.Net
@@ -132,6 +135,9 @@ class WebAppActivity : FragmentActivity(), WebAppActions {
     private val sniffer = MediaSniffer()
     @Volatile private var documentUrl = ""
     @Volatile private var adblockOn = true
+    /** This app's sites are routed through its VPN (set once routing is in place). */
+    @Volatile private var vpnAttached = false
+    private var vpnStatusJob: kotlinx.coroutines.Job? = null
     private val blockedThisPage = AtomicInteger(0)
 
     private var isolatedSupported = false
@@ -212,6 +218,7 @@ class WebAppActivity : FragmentActivity(), WebAppActions {
             this, lifecycleScope,
             sessionIntent = { ShortcutHelper.launchIntent(this, app!!) },
             cookieJar = { WebViewCookieJar(cookieManager()) },
+            httpClient = { VpnManager.httpClient(this, app) },
         )
         player.onVisibilityChanged = { visible -> onPlayerVisibility(visible) }
         player.onClosed = { request, position -> onPlayerClosed(request, position) }
@@ -223,8 +230,28 @@ class WebAppActivity : FragmentActivity(), WebAppActions {
         updateTaskDescription()
 
         createWebView()
-        val restored = savedInstanceState?.let { webView?.restoreState(it) } != null
-        if (!restored) webView?.loadUrl(startUrl(loaded))
+        if (loaded.settings.vpn != null) {
+            // Nothing may load before this app's sites are routed through its VPN.
+            watchVpnStatus(loaded)
+            VpnManager.attach(this, loaded) { ok, message ->
+                if (isDestroyed) {
+                    if (ok) VpnManager.detach(loaded)
+                    return@attach
+                }
+                vpnAttached = ok
+                if (!ok) {
+                    hideSplash()
+                    ui.vpnStatus = null
+                    ui.error = PageError(loaded.url, message ?: "The VPN isn't available")
+                    return@attach
+                }
+                val restored = savedInstanceState?.let { webView?.restoreState(it) } != null
+                if (!restored) webView?.loadUrl(startUrl(loaded))
+            }
+        } else {
+            val restored = savedInstanceState?.let { webView?.restoreState(it) } != null
+            if (!restored) webView?.loadUrl(startUrl(loaded))
+        }
 
         if (loaded.settings.appLock && lockSupported) {
             ui.locked = true
@@ -257,6 +284,24 @@ class WebAppActivity : FragmentActivity(), WebAppActions {
         lifecycleScope.launch {
             delay(8000)
             ui.splashVisible = false
+        }
+    }
+
+    /** Shows Tor's bootstrap progress while a Tor app connects. */
+    private fun watchVpnStatus(app: WebApp) {
+        vpnStatusJob?.cancel()
+        if (app.settings.vpn != VpnProfiles.TOR_ID) {
+            ui.vpnStatus = null
+            return
+        }
+        vpnStatusJob = lifecycleScope.launch {
+            TorController.status.collect { status ->
+                ui.vpnStatus = when (status.phase) {
+                    TorController.Phase.ON -> null
+                    TorController.Phase.ERROR -> "Tor: ${status.summary}"
+                    else -> "Connecting to Tor · ${status.progress}%"
+                }
+            }
         }
     }
 
@@ -321,6 +366,10 @@ class WebAppActivity : FragmentActivity(), WebAppActions {
 
     override fun onDestroy() {
         runCatching { unregisterReceiver(pipReceiver) }
+        if (vpnAttached) {
+            vpnAttached = false
+            app?.let { VpnManager.detach(it) }
+        }
         if (!isChangingConfigurations) app?.let { KeepAliveService.disconnect(this, it.id) }
         if (::player.isInitialized && !isChangingConfigurations && player.state.visible) player.close()
         popupWebView?.destroy()
@@ -535,7 +584,11 @@ class WebAppActivity : FragmentActivity(), WebAppActions {
 
         val messageName = InjectedScript.messageBridgeName(this)
         view.addJavascriptInterface(
-            CosmeticBridge(enabled = { adblockOn }, permissionLookup = { origin -> notificationPermissionFor(origin) }),
+            CosmeticBridge(
+                enabled = { adblockOn },
+                permissionLookup = { origin -> notificationPermissionFor(origin) },
+                vpnActive = { app?.settings?.vpn != null },
+            ),
             InjectedScript.cosmeticBridgeName(this),
         )
         // Don't announce "embedded WebView" to sites: Google and others refuse
@@ -594,6 +647,8 @@ class WebAppActivity : FragmentActivity(), WebAppActions {
 
     private inner class Client : WebViewClient() {
         override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
+            // Route a VPN app's new domains before the request leaves.
+            if (vpnAttached) app?.let { VpnManager.observe(it, request.url.host) }
             sniffer.observe(request)
             if (request.isForMainFrame) {
                 documentUrl = request.url.toString()
@@ -1451,10 +1506,24 @@ class WebAppActivity : FragmentActivity(), WebAppActions {
             }
             url.startsWith("http") -> {
                 val start = {
-                    runCatching {
-                        DownloadHelper.enqueue(this, url, userAgent, contentDisposition, mimeType, ui.url, cookieManager())
-                    }.onSuccess { ui.showToast("Downloading $it") }
-                        .onFailure { ui.showToast("Download failed") }
+                    val current = app
+                    if (vpnAttached && current != null) {
+                        // The system downloader would bypass this app's VPN.
+                        ui.showToast("Downloading through ${VpnProfiles.get(this).label(current.settings.vpn) ?: "the VPN"}…")
+                        val client = VpnManager.httpClient(this, current).newBuilder().cookieJar(WebViewCookieJar(cookieManager())).build()
+                        val referer = ui.url
+                        lifecycleScope.launch {
+                            val name = withContext(Dispatchers.IO) {
+                                runCatching { DownloadHelper.downloadWith(applicationContext, client, url, userAgent, referer, contentDisposition, mimeType) }.getOrNull()
+                            }
+                            ui.showToast(if (name != null) "Saved $name to Downloads" else "Download failed")
+                        }
+                    } else {
+                        runCatching {
+                            DownloadHelper.enqueue(this, url, userAgent, contentDisposition, mimeType, ui.url, cookieManager())
+                        }.onSuccess { ui.showToast("Downloading $it") }
+                            .onFailure { ui.showToast("Download failed") }
+                    }
                 }
                 if (Build.VERSION.SDK_INT <= 28) {
                     withRuntimePermissions(arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE)) { granted ->
@@ -1525,6 +1594,22 @@ class WebAppActivity : FragmentActivity(), WebAppActions {
         val o = old.settings
         val n = new.settings
         val view = webView
+        if (o.vpn != n.vpn) {
+            vpnAttached = false
+            view?.stopLoading()
+            if (n.vpn != null) watchVpnStatus(new) else ui.vpnStatus = null
+            VpnManager.reattach(this, old, new) { ok, message ->
+                vpnAttached = ok && n.vpn != null
+                if (!ok) {
+                    ui.vpnStatus = null
+                    ui.error = PageError(new.url, message ?: "The VPN isn't available")
+                } else {
+                    ui.error = null
+                    ui.showToast(VpnProfiles.get(this).label(n.vpn)?.let { "Now using $it" } ?: "VPN off for ${new.name}")
+                    view?.reload()
+                }
+            }
+        }
         if (o.adBlock != n.adBlock) {
             adblockOn = n.adBlock && AppSettings.get(this).state.value.adBlockEnabled
             ui.showToast(if (n.adBlock) "Ad blocking on" else "Ad blocking off")

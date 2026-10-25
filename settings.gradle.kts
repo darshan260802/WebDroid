@@ -17,6 +17,11 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        // Guardian Project's Maven repo: tor-android (Tor for the per-site VPN).
+        maven {
+            url = uri("https://raw.githubusercontent.com/guardianproject/gpmaven/master")
+            content { includeModule("info.guardianproject", "tor-android") }
+        }
     }
 }
 

@@ -38,7 +38,12 @@ object InjectedScript {
 class CosmeticBridge(
     private val enabled: () -> Boolean,
     private val permissionLookup: (String) -> String = { "default" },
+    private val vpnActive: () -> Boolean = { false },
 ) {
+    /** Whether this app uses a VPN (pages then keep WebRTC from revealing the real IP). */
+    @JavascriptInterface
+    fun vpn(): Boolean = vpnActive()
+
     /** "granted", "denied" or "default" for an origin, like the web API. */
     @JavascriptInterface
     fun notificationPermission(origin: String?): String =

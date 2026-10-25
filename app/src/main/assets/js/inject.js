@@ -15,6 +15,24 @@
     try { if (MSG) { MSG.postMessage(JSON.stringify(o)); } } catch (e) { }
   };
 
+  // Apps routed through a VPN: WebRTC ignores proxies and would reveal the
+  // real IP, so peer connections may only use relay (TURN) candidates.
+  try {
+    if (COSM && typeof COSM.vpn === 'function' && COSM.vpn() && typeof window.RTCPeerConnection === 'function') {
+      const NativePC = window.RTCPeerConnection;
+      const relayOnly = (c) => Object.assign({}, c || {}, { iceTransportPolicy: 'relay' });
+      const WrappedPC = function RTCPeerConnection(config, ...rest) { return new NativePC(relayOnly(config), ...rest); };
+      WrappedPC.prototype = NativePC.prototype;
+      Object.setPrototypeOf(WrappedPC, NativePC);
+      window.RTCPeerConnection = WrappedPC;
+      if (window.webkitRTCPeerConnection) { window.webkitRTCPeerConnection = WrappedPC; }
+      const setConfiguration = NativePC.prototype.setConfiguration;
+      if (setConfiguration) {
+        NativePC.prototype.setConfiguration = function (c) { return setConfiguration.call(this, relayOnly(c)); };
+      }
+    }
+  } catch (e) { }
+
   /* ------------------------------------------------------------------ */
   /* Ad blocking: uBO scriptlets + cosmetic filters                       */
   /* ------------------------------------------------------------------ */

@@ -38,6 +38,32 @@ jobs:
             node test.mjs ../../app/src/main/assets/adblock
           fi
 
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: tools/vpncore/go.mod
+          cache-dependency-path: tools/vpncore/go.sum
+
+      - name: Test and build the VPN core (gomobile)
+        shell: bash
+        run: |
+          cd tools/vpncore
+          go test ./...
+          export ANDROID_NDK_HOME="${ANDROID_NDK_LATEST_HOME:-${ANDROID_NDK_HOME:-}}"
+          echo "Using NDK at $ANDROID_NDK_HOME"
+          ./build.sh
+
+      - name: Bundle Tor GeoIP data (exit country selection)
+        shell: bash
+        run: |
+          mkdir -p app/src/main/assets/tor
+          if sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends tor-geoipdb && [ -s /usr/share/tor/geoip ]; then
+            cp /usr/share/tor/geoip /usr/share/tor/geoip6 app/src/main/assets/tor/
+          else
+            curl -fsSL -o app/src/main/assets/tor/geoip https://gitlab.torproject.org/tpo/core/tor/-/raw/main/src/config/geoip
+            curl -fsSL -o app/src/main/assets/tor/geoip6 https://gitlab.torproject.org/tpo/core/tor/-/raw/main/src/config/geoip6
+          fi
+          ls -la app/src/main/assets/tor
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin

@@ -423,6 +423,11 @@ fun EditorScreen(
                 )
             }
 
+            Spacer(Modifier.height(24.dp))
+            SectionLabel("VPN")
+            Spacer(Modifier.height(10.dp))
+            com.webdroid.app.ui.components.VpnPicker(settings.vpn, { settings = settings.copy(vpn = it) })
+
             if (existing != null) {
                 Spacer(Modifier.height(28.dp))
                 if (!confirmDelete) {

@@ -23,3 +23,11 @@
 -dontwarn org.openjsse.**
 -dontwarn org.jspecify.annotations.**
 -dontwarn com.google.re2j.**
+
+# gomobile bindings for the VPN core (called through JNI).
+-keep class go.** { *; }
+-keep class com.webdroid.vpncore.** { *; }
+
+# Tor (TorService is started by name; libtor calls back through JNI).
+-keep class org.torproject.jni.** { *; }
+-keep class net.freehaven.tor.control.** { *; }

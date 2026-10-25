@@ -27,6 +27,11 @@ data class WebAppSettings(
      */
     val keepAlive: Boolean = false,
     /**
+     * Per-site VPN: [com.webdroid.app.vpn.VpnProfiles.TOR_ID] or a saved
+     * profile id; null connects directly. Only this app's sites use it.
+     */
+    val vpn: String? = null,
+    /**
      * Per-origin decisions: "camera:", "mic:", "location:" and "notify:" grants,
      * "notify-block:" denials, followed by the origin.
      */

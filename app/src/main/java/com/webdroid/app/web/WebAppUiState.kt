@@ -69,6 +69,8 @@ class WebAppUiState {
     var toast by mutableStateOf<String?>(null)
     var toastSerial by mutableIntStateOf(0)
     var blockedCount by mutableIntStateOf(0)
+    /** VPN connection progress shown over the page (e.g. Tor bootstrapping). */
+    var vpnStatus by mutableStateOf<String?>(null)
 
     fun showToast(message: String) {
         toast = message
