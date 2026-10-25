@@ -110,7 +110,8 @@ class WebAppActivity : FragmentActivity(), WebAppActions {
             Intent(Intent.ACTION_VIEW, Uri.parse("webdroid://app/$appId"), context, WebAppActivity::class.java)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_DOCUMENT)
 
-        private const val LAST_URL_MAX_AGE_MS = 30 * 60 * 1000L
+        // Reopen where the user left off, like a native app would.
+        private const val LAST_URL_MAX_AGE_MS = 6 * 60 * 60 * 1000L
     }
 
     private val repo by lazy { WebAppRepository.get(this) }
@@ -150,6 +151,10 @@ class WebAppActivity : FragmentActivity(), WebAppActions {
     private var pendingPermissionResult: ((Map<String, Boolean>) -> Unit)? = null
     private val blobDownloads = HashMap<String, Pair<String, ByteArrayOutputStream>>()
     private var unlocking = false
+    /** Read from WebView's JavaBridge thread for Notification.permission. */
+    @Volatile private var grantedSnapshot: Set<String> = emptySet()
+    /** Page notification id -> frame that created it (for click/close events). */
+    private val notificationFrames = HashMap<String, JavaScriptReplyProxy>()
     private var lastPullStage = 0
 
     private val fileChooser = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -185,6 +190,7 @@ class WebAppActivity : FragmentActivity(), WebAppActions {
         }
         app = loaded
         adblockOn = loaded.settings.adBlock && AppSettings.get(this).state.value.adBlockEnabled
+        grantedSnapshot = loaded.settings.grantedPermissions
         AdblockEngine.init(this)
         (application as? com.webdroid.app.WebDroidApp)?.ensureWebViewSetup()
 
@@ -264,6 +270,12 @@ class WebAppActivity : FragmentActivity(), WebAppActions {
             .apply()
     }
 
+    override fun onStart() {
+        super.onStart()
+        // Foreground services may only be started while the app is visible.
+        app?.let { if (it.settings.keepAlive) KeepAliveService.connect(this, it.id, it.name) }
+    }
+
     override fun onResume() {
         super.onResume()
         webView?.onResume()
@@ -272,8 +284,17 @@ class WebAppActivity : FragmentActivity(), WebAppActions {
 
     override fun onPause() {
         super.onPause()
-        CookieManager.getInstance().flush()
-        if (!pageMediaPlaying && !player.state.visible) webView?.onPause()
+        cookieManager().flush()
+        val keepAlive = app?.settings?.keepAlive == true
+        if (!keepAlive && !pageMediaPlaying && !player.state.visible) webView?.onPause()
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        val pageId = intent.getStringExtra(WebNotifier.EXTRA_NOTIFICATION) ?: return
+        // A notification of this app was tapped: let the page react (open the chat...).
+        val frame = notificationFrames.remove(pageId) ?: mainFrameReply
+        frame?.let { sendCommand(it, "{\"cmd\":\"notifyClick\",\"id\":${kotlinx.serialization.json.JsonPrimitive(pageId)}}") }
     }
 
     override fun onStop() {
@@ -294,6 +315,7 @@ class WebAppActivity : FragmentActivity(), WebAppActions {
 
     override fun onDestroy() {
         runCatching { unregisterReceiver(pipReceiver) }
+        if (!isChangingConfigurations) app?.let { KeepAliveService.disconnect(this, it.id) }
         if (::player.isInitialized && !isChangingConfigurations && player.state.visible) player.close()
         popupWebView?.destroy()
         popupWebView = null
@@ -496,14 +518,28 @@ class WebAppActivity : FragmentActivity(), WebAppActions {
         if (WebViewFeature.isFeatureSupported(WebViewFeature.ALGORITHMIC_DARKENING)) {
             WebSettingsCompat.setAlgorithmicDarkeningAllowed(view.settings, current.settings.forceDark)
         }
-        cookieManager().setAcceptThirdPartyCookies(view, true)
+        cookieManager().apply {
+            setAcceptCookie(true)
+            setAcceptThirdPartyCookies(view, true)
+        }
         view.overScrollMode = View.OVER_SCROLL_NEVER
         view.isVerticalScrollBarEnabled = false
         view.isHorizontalScrollBarEnabled = false
         view.setBackgroundColor(if (current.settings.forceDark) 0xFF121212.toInt() else Color.WHITE)
 
         val messageName = InjectedScript.messageBridgeName(this)
-        view.addJavascriptInterface(CosmeticBridge { adblockOn }, InjectedScript.cosmeticBridgeName(this))
+        view.addJavascriptInterface(
+            CosmeticBridge(enabled = { adblockOn }, permissionLookup = { origin -> notificationPermissionFor(origin) }),
+            InjectedScript.cosmeticBridgeName(this),
+        )
+        // Don't announce "embedded WebView" to sites: Google and others refuse
+        // sign-in when they see the X-Requested-With header.
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.REQUESTED_WITH_HEADER_ALLOW_LIST)) {
+            WebSettingsCompat.setRequestedWithHeaderOriginAllowList(view.settings, emptySet())
+        }
+        if (current.settings.keepAlive && Build.VERSION.SDK_INT >= 26) {
+            view.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false)
+        }
         if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
             WebViewCompat.addWebMessageListener(view, messageName, setOf("*")) { _, message, origin, isMainFrame, reply ->
                 onPageMessage(message, origin, isMainFrame, reply, isPopup)
@@ -608,6 +644,21 @@ class WebAppActivity : FragmentActivity(), WebAppActions {
             updateNavState()
             rememberUrl(url)
             ui.blockedCount = blockedThisPage.get()
+            // Persist fresh login cookies right away rather than on the next flush tick.
+            cookieManager().flush()
+        }
+
+        override fun onReceivedHttpAuthRequest(view: WebView, handler: android.webkit.HttpAuthHandler, host: String, realm: String) {
+            if (handler.useHttpAuthUsernamePassword()) {
+                @Suppress("DEPRECATION")
+                val saved = view.getHttpAuthUsernamePassword(host, realm)
+                if (saved != null && saved.size == 2 && saved[0] != null && saved[1] != null) {
+                    handler.proceed(saved[0], saved[1])
+                    return
+                }
+            }
+            ui.httpAuth = HttpAuthPrompt(host, realm, handler)
+            hideSplash()
         }
 
         override fun doUpdateVisitedHistory(view: WebView, url: String, isReload: Boolean) {
@@ -826,6 +877,11 @@ class WebAppActivity : FragmentActivity(), WebAppActions {
             "video" -> if (!fromPopup) onVideoMessage(obj, reply)
             "videoPause" -> pageMediaPlaying = false
             "blob" -> onBlobChunk(obj)
+            "notify" -> onPageNotification(obj, reply)
+            "notifyClose" -> obj.str("id")?.let { id -> app?.let { WebNotifier.cancel(this, it, id) }; notificationFrames.remove(id) }
+            "notifyPermission" -> onNotificationPermissionRequest(obj, reply)
+            "share" -> onPageShare(obj, reply)
+            "print" -> printPage(obj.str("title"))
             "seeked" -> Unit
         }
     }
@@ -1168,6 +1224,14 @@ class WebAppActivity : FragmentActivity(), WebAppActions {
                 repo.update(current.id) { it.copy(settings = it.settings.copy(grantedPermissions = it.settings.grantedPermissions + keys)) }
                 grantMedia(prompt.request, prompt.camera, prompt.mic)
             }
+            is PermissionPrompt.Notifications -> {
+                setNotificationDecision(prompt.origin, allow) { state ->
+                    sendCommand(prompt.reply, "{\"cmd\":\"notifyPermission\",\"state\":\"$state\"}")
+                    if (state == "granted" && app?.settings?.keepAlive != true) {
+                        ui.showToast("Tip: turn on “Stay connected” in app settings for notifications in the background")
+                    }
+                }
+            }
             is PermissionPrompt.Location -> {
                 if (!allow) {
                     prompt.callback.invoke(prompt.origin, false, false)
@@ -1178,6 +1242,138 @@ class WebAppActivity : FragmentActivity(), WebAppActions {
                     prompt.callback.invoke(prompt.origin, granted, false)
                 }
             }
+        }
+    }
+
+    /* ---------------------------------------------------------------------- */
+    /* Web notifications (WebView has none: the page script routes them here) */
+    /* ---------------------------------------------------------------------- */
+
+    private fun notificationPermissionFor(origin: String): String {
+        val granted = grantedSnapshot
+        return when {
+            "notify-block:$origin" in granted -> "denied"
+            "notify:$origin" in granted -> {
+                // Granted by the user but blocked by Android: let the site ask again.
+                val current = app
+                if (current != null && WebNotifier.systemAllows(this, current)) "granted" else "default"
+            }
+            else -> "default"
+        }
+    }
+
+    private fun onNotificationPermissionRequest(obj: JsonObject, reply: JavaScriptReplyProxy) {
+        val origin = obj.str("origin") ?: return
+        val state = notificationPermissionFor(origin)
+        when {
+            state == "denied" -> sendCommand(reply, "{\"cmd\":\"notifyPermission\",\"state\":\"denied\"}")
+            "notify:$origin" in grantedSnapshot -> setNotificationDecision(origin, true) { s ->
+                sendCommand(reply, "{\"cmd\":\"notifyPermission\",\"state\":\"$s\"}")
+            }
+            ui.permissionPrompt == null -> ui.permissionPrompt = PermissionPrompt.Notifications(origin, reply)
+            else -> sendCommand(reply, "{\"cmd\":\"notifyPermission\",\"state\":\"default\"}")
+        }
+    }
+
+    /** Records the user's choice and, on allow, asks Android for its permission too. */
+    private fun setNotificationDecision(origin: String, allow: Boolean, result: (String) -> Unit) {
+        val current = app ?: return result("default")
+        repo.update(current.id) {
+            val keys = it.settings.grantedPermissions - "notify:$origin" - "notify-block:$origin"
+            it.copy(settings = it.settings.copy(grantedPermissions = keys + if (allow) "notify:$origin" else "notify-block:$origin"))
+        }
+        grantedSnapshot = grantedSnapshot - "notify:$origin" - "notify-block:$origin" + (if (allow) "notify:$origin" else "notify-block:$origin")
+        if (!allow) return result("denied")
+        val finish = {
+            if (WebNotifier.systemAllows(this, current)) {
+                result("granted")
+            } else {
+                ui.showToast("Notifications are turned off for WebDroid in Android settings")
+                result("default")
+            }
+        }
+        if (Build.VERSION.SDK_INT >= 33) {
+            withRuntimePermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS)) { finish() }
+        } else {
+            finish()
+        }
+    }
+
+    private fun onPageNotification(obj: JsonObject, reply: JavaScriptReplyProxy) {
+        val current = app ?: return
+        val origin = obj.str("origin") ?: return
+        if (notificationPermissionFor(origin) != "granted") return
+        val id = obj.str("id") ?: return
+        notificationFrames[id] = reply
+        if (notificationFrames.size > 200) notificationFrames.keys.firstOrNull()?.let { notificationFrames.remove(it) }
+        WebNotifier.show(
+            this, current,
+            WebNotification(
+                pageId = id,
+                title = obj.str("title").orEmpty(),
+                body = obj.str("body").orEmpty(),
+                tag = obj.str("tag").orEmpty(),
+                iconUrl = obj.str("icon")?.takeIf { it.isNotBlank() },
+                imageUrl = obj.str("image")?.takeIf { it.isNotBlank() },
+                silent = obj.bool("silent"),
+                origin = origin,
+            ),
+        )
+    }
+
+    private fun onPageShare(obj: JsonObject, reply: JavaScriptReplyProxy) {
+        val id = obj["id"]?.jsonPrimitive?.intOrNull ?: return
+        val text = listOf(obj.str("text"), obj.str("url")).filter { !it.isNullOrBlank() }.joinToString("\n")
+        val ok = runCatching {
+            val intent = Intent(Intent.ACTION_SEND).setType("text/plain")
+                .putExtra(Intent.EXTRA_TEXT, text)
+                .putExtra(Intent.EXTRA_SUBJECT, obj.str("title").orEmpty())
+            startActivity(Intent.createChooser(intent, obj.str("title")?.ifBlank { null }))
+        }.isSuccess
+        sendCommand(reply, "{\"cmd\":\"shareDone\",\"id\":$id,\"ok\":$ok}")
+    }
+
+    private fun printPage(title: String?) {
+        val view = webView ?: return
+        val name = (title?.ifBlank { null } ?: app?.name ?: "WebDroid").take(60)
+        runCatching {
+            val manager = getSystemService(PRINT_SERVICE) as android.print.PrintManager
+            manager.print(name, view.createPrintDocumentAdapter(name), android.print.PrintAttributes.Builder().build())
+        }.onFailure { ui.showToast("Printing isn't available") }
+    }
+
+    override fun answerHttpAuth(username: String?, password: String?) {
+        val prompt = ui.httpAuth ?: return
+        ui.httpAuth = null
+        if (username == null || password == null) {
+            prompt.handler.cancel()
+            return
+        }
+        @Suppress("DEPRECATION")
+        webView?.setHttpAuthUsernamePassword(prompt.host, prompt.realm, username, password)
+        prompt.handler.proceed(username, password)
+    }
+
+    override fun openNotificationSettings() {
+        val current = app ?: return
+        runCatching { startActivity(WebNotifier.channelSettingsIntent(this, current)) }
+    }
+
+    override fun setNotificationsAllowed(allowed: Boolean) {
+        val current = app ?: return
+        val origins = buildSet {
+            current.settings.grantedPermissions.filter { it.startsWith("notify:") || it.startsWith("notify-block:") }
+                .forEach { add(it.substringAfter(':')) }
+            UrlUtils.hostOf(current.url)?.let { host -> add("${Uri.parse(current.url).scheme}://$host") }
+        }
+        if (allowed) {
+            origins.forEach { origin -> setNotificationDecision(origin, true) { } }
+        } else {
+            repo.update(current.id) {
+                val keys = it.settings.grantedPermissions.filterNot { k -> k.startsWith("notify:") || k.startsWith("notify-block:") }.toSet()
+                it.copy(settings = it.settings.copy(grantedPermissions = keys + origins.map { o -> "notify-block:$o" }))
+            }
+            ui.showToast("Notifications blocked for ${current.name}")
         }
     }
 
@@ -1303,6 +1499,16 @@ class WebAppActivity : FragmentActivity(), WebAppActions {
         }
         if (o.isolatedSession != n.isolatedSession) ui.showToast("Applies the next time you open ${new.name}")
         if (o.appLock != n.appLock) setRecentsScreenshotsAllowed(!n.appLock)
+        grantedSnapshot = n.grantedPermissions
+        if (o.keepAlive != n.keepAlive) {
+            if (n.keepAlive) {
+                KeepAliveService.connect(this, new.id, new.name)
+                if (Build.VERSION.SDK_INT >= 26) view?.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false)
+            } else {
+                KeepAliveService.disconnect(this, new.id)
+                if (Build.VERSION.SDK_INT >= 26) view?.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, true)
+            }
+        }
         if (old.iconFile != new.iconFile) icon = IconStore.get(this).load(new.iconFile)
         if (old.name != new.name || old.cardColor != new.cardColor || old.iconFile != new.iconFile) {
             updateTaskDescription()
@@ -1320,6 +1526,13 @@ class WebAppActivity : FragmentActivity(), WebAppActions {
             player.state.visible -> player.close()
             customView != null -> exitSiteFullscreen(fromPage = false)
             ui.jsDialog != null -> answerJs(false, null)
+            ui.httpAuth != null -> answerHttpAuth(null, null)
+            ui.permissionPrompt is PermissionPrompt.Notifications -> {
+                // Dismissed without choosing: the site may ask again later.
+                val prompt = ui.permissionPrompt as PermissionPrompt.Notifications
+                ui.permissionPrompt = null
+                sendCommand(prompt.reply, "{\"cmd\":\"notifyPermission\",\"state\":\"default\"}")
+            }
             ui.permissionPrompt != null -> answerPermission(false)
             ui.linkMenu != null -> ui.linkMenu = null
             ui.settingsOpen -> ui.settingsOpen = false

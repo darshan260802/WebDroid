@@ -21,7 +21,15 @@ data class WebAppSettings(
     val appLock: Boolean = false,
     /** Off-site links the user taps open in the default browser. */
     val openLinksExternally: Boolean = true,
-    /** Origins granted camera/mic/location ("camera:https://a.b" style keys). */
+    /**
+     * Keep the page alive in the background (foreground service + important
+     * renderer) so chat sites keep their connection and can notify.
+     */
+    val keepAlive: Boolean = false,
+    /**
+     * Per-origin decisions: "camera:", "mic:", "location:" and "notify:" grants,
+     * "notify-block:" denials, followed by the origin.
+     */
     val grantedPermissions: Set<String> = emptySet(),
 )
 

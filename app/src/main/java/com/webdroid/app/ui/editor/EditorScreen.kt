@@ -60,6 +60,7 @@ import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Security
 import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material.icons.rounded.TextFields
+import androidx.compose.material.icons.rounded.Wifi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -415,6 +416,10 @@ fun EditorScreen(
                 ClaySwitchRow(
                     "Open other sites in browser", "Links to other websites leave the app",
                     settings.openLinksExternally, { settings = settings.copy(openLinksExternally = it) }, icon = Icons.Rounded.OpenInNew,
+                )
+                ClaySwitchRow(
+                    "Stay connected in background", "For chat and mail sites: keeps the app running so its notifications arrive while it's closed",
+                    settings.keepAlive, { settings = settings.copy(keepAlive = it) }, icon = Icons.Rounded.Wifi,
                 )
             }
 

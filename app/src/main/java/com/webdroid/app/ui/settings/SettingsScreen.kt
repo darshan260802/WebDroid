@@ -38,7 +38,9 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -213,6 +215,40 @@ fun SettingsScreen(
                     "Gestures: left side brightness, right side volume, swipe to seek, double-tap ±10s, pinch to zoom, hold for 2×.",
                     style = ClayType.Caption, color = Clay.Muted,
                 )
+            }
+
+            Spacer(Modifier.height(26.dp))
+            SectionLabel("Background & notifications")
+            Spacer(Modifier.height(8.dp))
+            val power = context.getSystemService(android.content.Context.POWER_SERVICE) as android.os.PowerManager
+            var unrestricted by remember { androidx.compose.runtime.mutableStateOf(power.isIgnoringBatteryOptimizations(context.packageName)) }
+            androidx.lifecycle.compose.LifecycleResumeEffect(Unit) {
+                unrestricted = power.isIgnoringBatteryOptimizations(context.packageName)
+                onPauseOrDispose { }
+            }
+            Column(Modifier.fillMaxWidth().clip(ClayShapes.Lg).background(Clay.SurfaceSoft).padding(16.dp)) {
+                Text(
+                    if (unrestricted) "Battery use: unrestricted" else "Battery use: optimised",
+                    style = ClayType.TitleSm, color = Clay.Ink,
+                )
+                Text(
+                    "Web apps with “Stay connected” keep receiving notifications more reliably when Android doesn't put WebDroid to sleep.",
+                    style = ClayType.BodySm, color = Clay.Muted, modifier = Modifier.padding(top = 4.dp, bottom = 12.dp),
+                )
+                if (!unrestricted) {
+                    ClayButton(
+                        "Allow background activity",
+                        onClick = {
+                            runCatching {
+                                context.startActivity(
+                                    Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${context.packageName}"))
+                                )
+                            }
+                        },
+                        style = ClayButtonStyle.Secondary,
+                        height = 44.dp,
+                    )
+                }
             }
 
             Spacer(Modifier.height(26.dp))

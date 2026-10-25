@@ -32,9 +32,18 @@ object InjectedScript {
 
 /**
  * Synchronous bridge used by the document-start script: cosmetic filters and
- * scriptlets must be known before the page's own scripts run.
+ * scriptlets must be known before the page's own scripts run, and
+ * `Notification.permission` must be answerable synchronously.
  */
-class CosmeticBridge(private val enabled: () -> Boolean) {
+class CosmeticBridge(
+    private val enabled: () -> Boolean,
+    private val permissionLookup: (String) -> String = { "default" },
+) {
+    /** "granted", "denied" or "default" for an origin, like the web API. */
+    @JavascriptInterface
+    fun notificationPermission(origin: String?): String =
+        if (origin.isNullOrEmpty()) "default" else permissionLookup(origin)
+
     @JavascriptInterface
     fun get(url: String?): String {
         if (url == null || !enabled()) return ""

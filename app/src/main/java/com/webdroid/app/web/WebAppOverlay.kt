@@ -68,6 +68,9 @@ import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.LocationOn
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.Menu
+import androidx.compose.material.icons.rounded.Notifications
+import androidx.compose.material.icons.rounded.NotificationsActive
+import androidx.compose.material.icons.rounded.Wifi
 import androidx.compose.material.icons.rounded.MoreHoriz
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.PowerSettingsNew
@@ -145,6 +148,9 @@ interface WebAppActions {
     fun shareText(text: String)
     fun download(url: String)
     fun answerPermission(allow: Boolean)
+    fun answerHttpAuth(username: String?, password: String?)
+    fun openNotificationSettings()
+    fun setNotificationsAllowed(allowed: Boolean)
     fun answerJs(confirmed: Boolean, text: String?)
     fun retry()
     fun playOffer()
@@ -216,6 +222,7 @@ fun WebAppOverlay(
         LinkSheet(state, actions)
         PermissionDialog(state, actions)
         JsDialogView(state, actions)
+        HttpAuthDialog(state, actions)
 
         if (playerVisible) player()
 
@@ -723,6 +730,26 @@ private fun BoxScope.SettingsSheet(
             icon = Icons.Rounded.Fingerprint, enabled = lockSupported,
         )
         HairlineDivider(Modifier.padding(vertical = 6.dp))
+        val notifyGranted = app.settings.grantedPermissions.any { it.startsWith("notify:") }
+        val notifyBlocked = !notifyGranted && app.settings.grantedPermissions.any { it.startsWith("notify-block:") }
+        ClaySwitchRow(
+            "Notifications",
+            when {
+                notifyGranted -> "Allowed · the site can notify you"
+                notifyBlocked -> "Blocked"
+                else -> "The site hasn't asked yet"
+            },
+            notifyGranted, { v -> actions.setNotificationsAllowed(v) },
+            icon = Icons.Rounded.Notifications,
+        )
+        ClaySwitchRow(
+            "Stay connected in background",
+            "Keeps the app running so chats can notify you when it's closed. Shows a quiet status notification.",
+            app.settings.keepAlive, { v -> actions.updateSettings { it.copy(keepAlive = v) } },
+            icon = Icons.Rounded.Wifi,
+        )
+        MenuRow(Icons.Rounded.Settings, "Sound & notification style") { close(); actions.openNotificationSettings() }
+        HairlineDivider(Modifier.padding(vertical = 6.dp))
         MenuRow(Icons.Rounded.Edit, "Edit name, icon and colour") { close(); actions.editApp() }
         MenuRow(Icons.Rounded.DeleteSweep, "Clear site data", "Signs you out of ${UrlUtils.displayHost(app.url)}", tint = Clay.Error) {
             close(); actions.clearSiteData()
@@ -785,18 +812,19 @@ private fun PermissionDialog(state: WebAppUiState, actions: WebAppActions) {
         val current = state.permissionPrompt ?: return@AnimatedVisibility
         DialogCard {
             val (icon, what) = when (current) {
-                is PermissionPrompt.Location -> Icons.Rounded.LocationOn to "your location"
+                is PermissionPrompt.Location -> Icons.Rounded.LocationOn to "wants to use your location"
+                is PermissionPrompt.Notifications -> Icons.Rounded.NotificationsActive to "wants to send you notifications"
                 is PermissionPrompt.Media -> Icons.Rounded.CameraAlt to when {
-                    current.camera && current.mic -> "your camera and microphone"
-                    current.camera -> "your camera"
-                    else -> "your microphone"
+                    current.camera && current.mic -> "wants to use your camera and microphone"
+                    current.camera -> "wants to use your camera"
+                    else -> "wants to use your microphone"
                 }
             }
             Box(Modifier.size(52.dp).clip(ClayShapes.Lg).background(Clay.Lavender), contentAlignment = Alignment.Center) {
                 Icon(icon, null, tint = Clay.Ink, modifier = Modifier.size(26.dp))
             }
             Spacer(Modifier.height(16.dp))
-            Text("${UrlUtils.displayHost(current.origin)} wants to use $what", style = ClayType.TitleLg, color = Clay.Ink)
+            Text("${UrlUtils.displayHost(current.origin)} $what", style = ClayType.TitleLg, color = Clay.Ink)
             Spacer(Modifier.height(20.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 ClayButton("Block", onClick = { actions.answerPermission(false) }, style = ClayButtonStyle.Secondary, modifier = Modifier.weight(1f))
@@ -826,6 +854,38 @@ private fun JsDialogView(state: WebAppUiState, actions: WebAppActions) {
                     ClayButton("Cancel", onClick = { actions.answerJs(false, null) }, style = ClayButtonStyle.Secondary, modifier = Modifier.weight(1f))
                 }
                 ClayButton("OK", onClick = { actions.answerJs(true, text) }, modifier = Modifier.weight(1f))
+            }
+        }
+    }
+}
+
+@Composable
+private fun HttpAuthDialog(state: WebAppUiState, actions: WebAppActions) {
+    val prompt = state.httpAuth
+    AnimatedVisibility(visible = prompt != null, enter = fadeIn() + scaleIn(initialScale = 0.94f), exit = fadeOut()) {
+        val current = state.httpAuth ?: return@AnimatedVisibility
+        var user by remember(current) { mutableStateOf("") }
+        var pass by remember(current) { mutableStateOf("") }
+        DialogCard {
+            Box(Modifier.size(52.dp).clip(ClayShapes.Lg).background(Clay.Peach), contentAlignment = Alignment.Center) {
+                Icon(Icons.Rounded.Lock, null, tint = Clay.Ink, modifier = Modifier.size(26.dp))
+            }
+            Spacer(Modifier.height(16.dp))
+            Text("Sign in to ${current.host}", style = ClayType.TitleLg, color = Clay.Ink)
+            if (current.realm.isNotBlank()) {
+                Text(current.realm, style = ClayType.BodySm, color = Clay.Muted)
+            }
+            Spacer(Modifier.height(16.dp))
+            ClayTextField(value = user, onValueChange = { user = it }, placeholder = "Username")
+            Spacer(Modifier.height(10.dp))
+            ClayTextField(
+                value = pass, onValueChange = { pass = it }, placeholder = "Password",
+                keyboardOptions = KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Password),
+            )
+            Spacer(Modifier.height(20.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                ClayButton("Cancel", onClick = { actions.answerHttpAuth(null, null) }, style = ClayButtonStyle.Secondary, modifier = Modifier.weight(1f))
+                ClayButton("Sign in", onClick = { actions.answerHttpAuth(user, pass) }, enabled = user.isNotBlank(), modifier = Modifier.weight(1f))
             }
         }
     }

@@ -21,7 +21,11 @@ sealed interface PermissionPrompt {
 
     data class Media(override val origin: String, val request: PermissionRequest, val camera: Boolean, val mic: Boolean) : PermissionPrompt
     data class Location(override val origin: String, val callback: GeolocationPermissions.Callback) : PermissionPrompt
+    data class Notifications(override val origin: String, val reply: androidx.webkit.JavaScriptReplyProxy) : PermissionPrompt
 }
+
+/** A site behind HTTP authentication (basic/digest). */
+data class HttpAuthPrompt(val host: String, val realm: String, val handler: android.webkit.HttpAuthHandler)
 
 sealed interface JsDialog {
     val message: String
@@ -54,6 +58,7 @@ class WebAppUiState {
     var linkMenu by mutableStateOf<LinkMenu?>(null)
     var permissionPrompt by mutableStateOf<PermissionPrompt?>(null)
     var jsDialog by mutableStateOf<JsDialog?>(null)
+    var httpAuth by mutableStateOf<HttpAuthPrompt?>(null)
     var error by mutableStateOf<PageError?>(null)
     var videoOffer by mutableStateOf<VideoOffer?>(null)
     var locked by mutableStateOf(false)
@@ -71,5 +76,5 @@ class WebAppUiState {
     }
 
     val anySheetOpen: Boolean
-        get() = menuOpen || settingsOpen || linkMenu != null || permissionPrompt != null || jsDialog != null
+        get() = menuOpen || settingsOpen || linkMenu != null || permissionPrompt != null || jsDialog != null || httpAuth != null
 }

@@ -262,6 +262,136 @@
   };
 
   /* ------------------------------------------------------------------ */
+  /* Web platform shims: Notifications, Web Share, print                  */
+  /* Android WebView implements none of these; route them to native.      */
+  /* ------------------------------------------------------------------ */
+
+  const shim = { permission: 'default', pendingPermission: [], notifications: new Map(), shares: new Map(), seq: 0 };
+  try {
+    if (COSM && typeof COSM.notificationPermission === 'function') {
+      shim.permission = COSM.notificationPermission(location.origin) || 'default';
+    }
+  } catch (e) { }
+
+  const absUrl = (u) => { try { return u ? new URL(String(u), location.href).href : ''; } catch (e) { return ''; } };
+
+  class WebDroidNotification extends EventTarget {
+    constructor(title, options) {
+      super();
+      if (arguments.length === 0) { throw new TypeError("Failed to construct 'Notification': 1 argument required, but only 0 present."); }
+      options = options || {};
+      this.title = String(title);
+      this.body = options.body ? String(options.body) : '';
+      this.tag = options.tag ? String(options.tag) : '';
+      this.icon = absUrl(options.icon);
+      this.image = absUrl(options.image);
+      this.badge = absUrl(options.badge);
+      this.data = options.data === undefined ? null : options.data;
+      this.dir = options.dir || 'auto';
+      this.lang = options.lang || '';
+      this.silent = !!options.silent;
+      this.renotify = !!options.renotify;
+      this.requireInteraction = !!options.requireInteraction;
+      this.timestamp = options.timestamp || Date.now();
+      this.actions = [];
+      this.vibrate = [];
+      this.onclick = null; this.onshow = null; this.onclose = null; this.onerror = null;
+      this.__id = this.tag ? 'tag:' + this.tag : 'n' + (++shim.seq) + '-' + Date.now();
+      shim.notifications.set(this.__id, this);
+      if (shim.permission !== 'granted') {
+        setTimeout(() => this.__fire('error'), 0);
+        return;
+      }
+      post({
+        t: 'notify', id: this.__id, title: this.title, body: this.body, tag: this.tag,
+        icon: this.icon, image: this.image, silent: this.silent, origin: location.origin, url: location.href,
+      });
+      setTimeout(() => this.__fire('show'), 0);
+    }
+    static get permission() { return shim.permission; }
+    static get maxActions() { return 0; }
+    static requestPermission(callback) {
+      return new Promise((resolve) => {
+        const done = (p) => {
+          shim.permission = p;
+          if (typeof callback === 'function') { try { callback(p); } catch (e) { } }
+          resolve(p);
+        };
+        if (shim.permission !== 'default') { done(shim.permission); return; }
+        shim.pendingPermission.push(done);
+        if (shim.pendingPermission.length === 1) { post({ t: 'notifyPermission', origin: location.origin }); }
+      });
+    }
+    close() {
+      post({ t: 'notifyClose', id: this.__id });
+      shim.notifications.delete(this.__id);
+      this.__fire('close');
+    }
+    __fire(type) {
+      const ev = new Event(type, { cancelable: type === 'click' });
+      const handler = this['on' + type];
+      if (typeof handler === 'function') { try { handler.call(this, ev); } catch (e) { } }
+      this.dispatchEvent(ev);
+    }
+  }
+  try {
+    Object.defineProperty(window, 'Notification', { value: WebDroidNotification, configurable: true, writable: true });
+  } catch (e) { }
+
+  if (window.ServiceWorkerRegistration && ServiceWorkerRegistration.prototype) {
+    try {
+      ServiceWorkerRegistration.prototype.showNotification = function (title, options) {
+        if (shim.permission !== 'granted') {
+          return Promise.reject(new TypeError('No notification permission has been granted for this origin.'));
+        }
+        new WebDroidNotification(title, options);
+        return Promise.resolve();
+      };
+      ServiceWorkerRegistration.prototype.getNotifications = function (filter) {
+        const tag = filter && filter.tag;
+        return Promise.resolve(Array.from(shim.notifications.values()).filter(n => !tag || n.tag === tag));
+      };
+    } catch (e) { }
+  }
+
+  if (navigator.permissions && typeof navigator.permissions.query === 'function') {
+    const originalQuery = navigator.permissions.query.bind(navigator.permissions);
+    try {
+      navigator.permissions.query = function (descriptor) {
+        if (descriptor && (descriptor.name === 'notifications' || descriptor.name === 'push')) {
+          const status = new EventTarget();
+          const state = shim.permission === 'default' ? 'prompt' : shim.permission;
+          Object.defineProperties(status, {
+            state: { get: () => (shim.permission === 'default' ? 'prompt' : shim.permission) },
+            name: { value: descriptor.name },
+          });
+          status.onchange = null;
+          void state;
+          return Promise.resolve(status);
+        }
+        return originalQuery(descriptor);
+      };
+    } catch (e) { }
+  }
+
+  if (typeof navigator.share !== 'function') {
+    try {
+      navigator.share = function (data) {
+        data = data || {};
+        return new Promise((resolve, reject) => {
+          if (!data.title && !data.text && !data.url) { reject(new TypeError('No known share data fields supplied.')); return; }
+          const id = ++shim.seq;
+          shim.shares.set(id, { resolve, reject });
+          post({ t: 'share', id, title: String(data.title || ''), text: String(data.text || ''), url: absUrl(data.url) });
+        });
+      };
+      navigator.canShare = function (data) { return !!data && !data.files && !!(data.title || data.text || data.url); };
+    } catch (e) { }
+  }
+
+  try { window.print = function () { post({ t: 'print', title: document.title }); }; } catch (e) { }
+
+  /* ------------------------------------------------------------------ */
   /* Native -> page commands                                             */
   /* ------------------------------------------------------------------ */
 
@@ -302,6 +432,31 @@
       case 'probe': {
         const v = activeVideo();
         if (v) { post({ t: 'seeked', time: v.currentTime, dur: isFinite(v.duration) ? v.duration : 0 }); }
+        break;
+      }
+      case 'notifyPermission': {
+        const waiting = shim.pendingPermission.splice(0);
+        for (const done of waiting) { done(msg.state); }
+        if (waiting.length === 0) { shim.permission = msg.state; }
+        break;
+      }
+      case 'notifyClick': {
+        const n = shim.notifications.get(msg.id);
+        if (n) { n.__fire('click'); }
+        try { window.focus(); } catch (e) { }
+        break;
+      }
+      case 'notifyClosed': {
+        const n = shim.notifications.get(msg.id);
+        if (n) { shim.notifications.delete(msg.id); n.__fire('close'); }
+        break;
+      }
+      case 'shareDone': {
+        const pending = shim.shares.get(msg.id);
+        if (pending) {
+          shim.shares.delete(msg.id);
+          if (msg.ok) { pending.resolve(); } else { pending.reject(new DOMException('Share canceled', 'AbortError')); }
+        }
         break;
       }
       case 'blob': {

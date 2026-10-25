@@ -240,6 +240,7 @@ class MainActivity : ComponentActivity() {
     private fun deleteApp(app: WebApp) {
         repo.delete(app.id)
         ShortcutHelper.remove(this, app)
+        com.webdroid.app.web.WebNotifier.deleteChannel(this, app)
         lifecycleScope.launch(Dispatchers.IO) {
             icons.delete(app.id)
             getSharedPreferences("last_urls", MODE_PRIVATE).edit().remove(app.id).apply()
