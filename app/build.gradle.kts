@@ -94,6 +94,7 @@ kotlin {
             "-opt-in=androidx.compose.foundation.ExperimentalFoundationApi",
             "-opt-in=androidx.media3.common.util.UnstableApi",
             "-opt-in=app.cash.zipline.EngineApi",
+            "-opt-in=androidx.compose.foundation.layout.ExperimentalLayoutApi",
         )
     }
 }

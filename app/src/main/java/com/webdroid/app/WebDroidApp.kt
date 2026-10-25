@@ -20,6 +20,17 @@ class WebDroidApp : Application() {
         // Start loading uBO's engine immediately, off the main thread.
         AdblockEngine.init(this)
         FilterUpdateWorker.schedule(this)
+    }
+
+    @Volatile private var webViewSetupDone = false
+
+    /**
+     * WebView-dependent setup, deferred until a web app first opens so that
+     * launching WebDroid itself doesn't pay for Chromium's initialisation.
+     */
+    fun ensureWebViewSetup() {
+        if (webViewSetupDone) return
+        webViewSetupDone = true
         installServiceWorkerFilter()
         deletePendingProfiles()
     }

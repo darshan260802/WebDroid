@@ -57,7 +57,7 @@ import kotlinx.coroutines.withContext
 
 sealed interface Screen {
     data object Home : Screen
-    data class Editor(val appId: String?) : Screen
+    data class Editor(val appId: String?, val prefillUrl: String? = null) : Screen
     data object Settings : Screen
 }
 
@@ -78,8 +78,9 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         handleIntent(intent)
 
-        val isolatedSupported = WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE)
-        val lockSupported = AppLock.isAvailable(this)
+        // Checked lazily: querying WebView features loads Chromium.
+        val isolatedSupported by lazy { WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE) }
+        val lockSupported by lazy { AppLock.isAvailable(this) }
 
         setContent {
             WebDroidTheme {
@@ -131,6 +132,7 @@ class MainActivity : ComponentActivity() {
                                 callbacks = HomeCallbacks(
                                     onOpen = { app, bounds -> openApp(app, bounds) },
                                     onCreate = { screen = Screen.Editor(null) },
+                                    onCreateFrom = { url -> screen = Screen.Editor(null, url) },
                                     onEdit = { screen = Screen.Editor(it.id) },
                                     onSettings = { screen = Screen.Settings },
                                     onPin = { app ->
@@ -147,6 +149,7 @@ class MainActivity : ComponentActivity() {
                                 val existing = target.appId?.let { id -> apps.firstOrNull { it.id == id } }
                                 EditorScreen(
                                     existing = existing,
+                                    prefillUrl = target.prefillUrl,
                                     existingIcon = existing?.let { iconsById[it.id] },
                                     defaultCardColor = repo.nextCardColor(),
                                     isolatedSupported = isolatedSupported,

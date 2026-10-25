@@ -122,6 +122,7 @@ data class EditorResult(
 fun EditorScreen(
     existing: WebApp?,
     existingIcon: Bitmap?,
+    prefillUrl: String? = null,
     defaultCardColor: Int,
     isolatedSupported: Boolean,
     lockSupported: Boolean,
@@ -137,7 +138,7 @@ fun EditorScreen(
     val haptics = rememberHaptics()
     val scope = rememberCoroutineScope()
 
-    var url by remember { mutableStateOf(existing?.url.orEmpty()) }
+    var url by remember { mutableStateOf(existing?.url ?: prefillUrl.orEmpty()) }
     var name by remember { mutableStateOf(existing?.name.orEmpty()) }
     var nameEdited by remember { mutableStateOf(existing != null) }
     var icon by remember { mutableStateOf(existingIcon) }

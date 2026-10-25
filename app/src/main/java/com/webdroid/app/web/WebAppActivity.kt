@@ -186,6 +186,7 @@ class WebAppActivity : FragmentActivity(), WebAppActions {
         app = loaded
         adblockOn = loaded.settings.adBlock && AppSettings.get(this).state.value.adBlockEnabled
         AdblockEngine.init(this)
+        (application as? com.webdroid.app.WebDroidApp)?.ensureWebViewSetup()
 
         WindowCompat.setDecorFitsSystemWindows(window, false)
         @Suppress("DEPRECATION")

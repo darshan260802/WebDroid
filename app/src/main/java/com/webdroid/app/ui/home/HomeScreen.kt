@@ -89,6 +89,7 @@ import kotlinx.coroutines.delay
 data class HomeCallbacks(
     val onOpen: (WebApp, Rect?) -> Unit,
     val onCreate: () -> Unit,
+    val onCreateFrom: (String) -> Unit,
     val onEdit: (WebApp) -> Unit,
     val onSettings: () -> Unit,
     val onPin: (WebApp) -> Unit,
@@ -131,7 +132,7 @@ fun HomeScreen(
             }
             if (apps.isEmpty()) {
                 item(span = { GridItemSpan(maxLineSpan) }, key = "empty") {
-                    EmptyState(callbacks.onCreate)
+                    EmptyState(callbacks.onCreate, callbacks.onCreateFrom)
                 }
             } else {
                 if (apps.size >= 6) {
@@ -242,8 +243,17 @@ fun formatCount(n: Int): String = when {
     else -> n.toString()
 }
 
+private val SUGGESTIONS = listOf(
+    "YouTube" to "https://m.youtube.com",
+    "Instagram" to "https://www.instagram.com",
+    "X" to "https://x.com",
+    "Reddit" to "https://www.reddit.com",
+    "ChatGPT" to "https://chatgpt.com",
+    "WhatsApp" to "https://web.whatsapp.com",
+)
+
 @Composable
-private fun EmptyState(onCreate: () -> Unit) {
+private fun EmptyState(onCreate: () -> Unit, onCreateFrom: (String) -> Unit) {
     Column(
         Modifier
             .fillMaxWidth()
@@ -261,6 +271,28 @@ private fun EmptyState(onCreate: () -> Unit) {
             )
             Spacer(Modifier.height(22.dp))
             ClayButton("Create your first app", onClick = onCreate, icon = Icons.Rounded.Add, modifier = Modifier.fillMaxWidth())
+            Spacer(Modifier.height(20.dp))
+            SectionLabel("Or start with")
+            Spacer(Modifier.height(10.dp))
+            androidx.compose.foundation.layout.FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                val haptics = rememberHaptics()
+                SUGGESTIONS.forEachIndexed { i, (label, url) ->
+                    val color = CardColor.of(i)
+                    Text(
+                        label,
+                        style = ClayType.NavLink,
+                        color = color.content,
+                        modifier = Modifier
+                            .clip(ClayShapes.Pill)
+                            .background(color.background)
+                            .clickable { haptics.tap(); onCreateFrom(url) }
+                            .padding(horizontal = 16.dp, vertical = 9.dp),
+                    )
+                }
+            }
         }
     }
 }
