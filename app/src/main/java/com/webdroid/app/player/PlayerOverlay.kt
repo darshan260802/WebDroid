@@ -636,11 +636,11 @@ private fun RoundControl(
 private fun PillButton(text: String, onClick: () -> Unit) {
     Text(
         text,
-        color = Clay.Ink,
+        color = Clay.Black,
         style = ClayType.Button,
         modifier = Modifier
             .clip(ClayShapes.Md)
-            .background(Clay.Canvas)
+            .background(Clay.Cream)
             .clickable(onClick = onClick)
             .padding(horizontal = 18.dp, vertical = 12.dp),
     )

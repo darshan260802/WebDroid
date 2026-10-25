@@ -192,7 +192,7 @@ fun WebAppOverlay(
             exit = slideOutVertically { it } + fadeOut(),
             modifier = Modifier.fillMaxSize(),
         ) {
-            Box(Modifier.fillMaxSize().background(Clay.Ink.copy(alpha = 0.32f))) {
+            Box(Modifier.fillMaxSize().background(Clay.Scrim)) {
                 Column(
                     Modifier
                         .fillMaxSize()
@@ -400,7 +400,7 @@ private fun BoxScope.MiniToolbar(state: WebAppUiState, actions: WebAppActions) {
                         Modifier
                             .size(width = 38.dp, height = 5.dp)
                             .clip(ClayShapes.Pill)
-                            .background(Clay.Ink.copy(alpha = 0.32f))
+                            .background(Clay.Black.copy(alpha = 0.32f))
                             .border(0.5.dp, Color.White.copy(alpha = 0.5f), ClayShapes.Pill)
                     )
                 }
@@ -479,7 +479,7 @@ private fun BoxScope.VideoOfferPill(state: WebAppUiState, actions: WebAppActions
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(Modifier.size(34.dp).clip(CircleShape).background(Clay.Pink), contentAlignment = Alignment.Center) {
-                Icon(Icons.Rounded.PlayArrow, null, tint = Clay.OnPrimary, modifier = Modifier.size(20.dp))
+                Icon(Icons.Rounded.PlayArrow, null, tint = Clay.White, modifier = Modifier.size(20.dp))
             }
             Spacer(Modifier.width(10.dp))
             Text("Play in WebDroid player", style = ClayType.Button, color = Clay.OnPrimary)
@@ -488,7 +488,7 @@ private fun BoxScope.VideoOfferPill(state: WebAppUiState, actions: WebAppActions
                 Modifier.size(34.dp).clip(CircleShape).clickable { actions.dismissOffer() },
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(Icons.Rounded.Close, "Dismiss", tint = Clay.OnDarkSoft, modifier = Modifier.size(18.dp))
+                Icon(Icons.Rounded.Close, "Dismiss", tint = Clay.OnPrimary.copy(alpha = 0.6f), modifier = Modifier.size(18.dp))
             }
         }
     }
@@ -532,7 +532,7 @@ private fun BoxScope.ClaySheet(visible: Boolean, onDismiss: () -> Unit, content:
         Box(
             Modifier
                 .fillMaxSize()
-                .background(Clay.Ink.copy(alpha = 0.34f))
+                .background(Clay.Scrim)
                 .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { onDismiss() }
         )
     }
@@ -787,7 +787,7 @@ private fun DialogCard(content: @Composable ColumnScope.() -> Unit) {
     Box(
         Modifier
             .fillMaxSize()
-            .background(Clay.Ink.copy(alpha = 0.34f))
+            .background(Clay.Scrim)
             .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { }
             .imePadding(),
         contentAlignment = Alignment.Center,
@@ -821,7 +821,7 @@ private fun PermissionDialog(state: WebAppUiState, actions: WebAppActions) {
                 }
             }
             Box(Modifier.size(52.dp).clip(ClayShapes.Lg).background(Clay.Lavender), contentAlignment = Alignment.Center) {
-                Icon(icon, null, tint = Clay.Ink, modifier = Modifier.size(26.dp))
+                Icon(icon, null, tint = Clay.Black, modifier = Modifier.size(26.dp))
             }
             Spacer(Modifier.height(16.dp))
             Text("${UrlUtils.displayHost(current.origin)} $what", style = ClayType.TitleLg, color = Clay.Ink)
@@ -868,7 +868,7 @@ private fun HttpAuthDialog(state: WebAppUiState, actions: WebAppActions) {
         var pass by remember(current) { mutableStateOf("") }
         DialogCard {
             Box(Modifier.size(52.dp).clip(ClayShapes.Lg).background(Clay.Peach), contentAlignment = Alignment.Center) {
-                Icon(Icons.Rounded.Lock, null, tint = Clay.Ink, modifier = Modifier.size(26.dp))
+                Icon(Icons.Rounded.Lock, null, tint = Clay.Black, modifier = Modifier.size(26.dp))
             }
             Spacer(Modifier.height(16.dp))
             Text("Sign in to ${current.host}", style = ClayType.TitleLg, color = Clay.Ink)

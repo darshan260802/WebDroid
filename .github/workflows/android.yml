@@ -90,12 +90,43 @@ jobs:
           NAME="WebDroid-v${WEBDROID_VERSION_NAME}.apk"
           cp "$SRC" "dist/$NAME"
           echo "name=$NAME" >> "$GITHUB_OUTPUT"
+
+          # OTA manifest: installed apps read releases/latest/download/update.json.
+          NOTES_FILE="release-notes/${RELEASE_TAG}.md"
+          if [ ! -f "$NOTES_FILE" ]; then
+            NOTES_FILE=$(mktemp)
+            git log -1 --pretty=%B > "$NOTES_FILE"
+          fi
+          cp "$NOTES_FILE" dist/release-notes.md
+          VERSION_CODE=$(git rev-list --count HEAD) \
+          APK="dist/$NAME" NOTES="$NOTES_FILE" \
+          APK_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/${NAME}" \
+          python3 - <<'PY'
+          import hashlib, json, os, datetime
+          apk = os.environ["APK"]
+          sha = hashlib.sha256(open(apk, "rb").read()).hexdigest()
+          info = {
+              "versionName": os.environ["WEBDROID_VERSION_NAME"],
+              "versionCode": int(os.environ["VERSION_CODE"]),
+              "tag": os.environ["RELEASE_TAG"],
+              "apkUrl": os.environ["APK_URL"],
+              "size": os.path.getsize(apk),
+              "sha256": sha,
+              "minSdk": 26,
+              "notes": open(os.environ["NOTES"], encoding="utf-8").read().strip(),
+              "publishedAt": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+          }
+          json.dump(info, open("dist/update.json", "w"), indent=2)
+          print(json.dumps({k: v for k, v in info.items() if k != "notes"}, indent=2))
+          PY
           ls -la dist
 
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.apk.outputs.name }}
-          path: dist/*.apk
+          path: |
+            dist/*.apk
+            dist/update.json
           if-no-files-found: error
 
       - name: Publish GitHub release
@@ -111,14 +142,9 @@ jobs:
             echo "::warning::Not publishing $RELEASE_TAG without the release signing key"
             exit 0
           fi
-          NOTES_FILE=$(mktemp)
-          if [ -f "release-notes/${RELEASE_TAG}.md" ]; then
-            cp "release-notes/${RELEASE_TAG}.md" "$NOTES_FILE"
-          else
-            git log -1 --pretty=%B > "$NOTES_FILE"
-          fi
-          gh release create "$RELEASE_TAG" dist/*.apk \
+          # update.json makes every release an OTA update for installed apps.
+          gh release create "$RELEASE_TAG" dist/*.apk dist/update.json \
             --target "$GITHUB_SHA" \
             --title "WebDroid ${RELEASE_TAG}" \
-            --notes-file "$NOTES_FILE" \
+            --notes-file dist/release-notes.md \
             --latest

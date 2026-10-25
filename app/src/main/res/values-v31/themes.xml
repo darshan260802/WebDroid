@@ -12,6 +12,31 @@
         <item name="android:windowSplashScreenIconBackgroundColor">@color/brand_ochre</item>
     </style>
 
+    <!-- Explicit light/dark variants for when the user overrides the system theme. -->
+    <style name="Theme.WebDroid.Light" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/canvas</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
+        <item name="android:colorAccent">@color/ink</item>
+        <item name="android:windowSplashScreenBackground">@color/canvas</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
+        <item name="android:windowSplashScreenIconBackgroundColor">@color/brand_ochre</item>
+    </style>
+
+    <style name="Theme.WebDroid.Dark" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/canvas_dark</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+        <item name="android:colorAccent">@color/ink_dark</item>
+        <item name="android:windowSplashScreenBackground">@color/canvas_dark</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
+        <item name="android:windowSplashScreenIconBackgroundColor">@color/brand_ochre</item>
+    </style>
+
     <!-- The web app draws its own branded splash; keep the system one blank. -->
     <style name="Theme.WebDroid.WebApp" parent="android:Theme.Material.Light.NoActionBar">
         <item name="android:windowBackground">@color/web_light</item>

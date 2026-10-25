@@ -6,6 +6,9 @@ import androidx.compose.animation.AnimatedVisibilityScope
 import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.SharedTransitionScope
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
@@ -44,8 +47,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.AddToHomeScreen
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.DarkMode
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.LightMode
 import androidx.compose.material.icons.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Settings
@@ -84,6 +89,10 @@ import com.webdroid.app.ui.theme.Clay
 import com.webdroid.app.ui.theme.ClayMotion
 import com.webdroid.app.ui.theme.ClayShapes
 import com.webdroid.app.ui.theme.ClayType
+import com.webdroid.app.ui.update.UpdateActions
+import com.webdroid.app.ui.update.UpdateCard
+import com.webdroid.app.ui.update.info
+import com.webdroid.app.update.UpdateState
 import kotlinx.coroutines.delay
 
 data class HomeCallbacks(
@@ -92,6 +101,7 @@ data class HomeCallbacks(
     val onCreateFrom: (String) -> Unit,
     val onEdit: (WebApp) -> Unit,
     val onSettings: () -> Unit,
+    val onToggleTheme: () -> Unit,
     val onPin: (WebApp) -> Unit,
     val onDelete: (WebApp) -> Unit,
 )
@@ -103,6 +113,8 @@ fun HomeScreen(
     icons: Map<String, Bitmap?>,
     adblockStatus: AdblockEngine.Status,
     adblockEnabled: Boolean,
+    update: UpdateState,
+    updateActions: UpdateActions,
     callbacks: HomeCallbacks,
     sharedScope: SharedTransitionScope,
     animatedScope: AnimatedVisibilityScope,
@@ -128,7 +140,7 @@ fun HomeScreen(
             modifier = Modifier.fillMaxSize(),
         ) {
             item(span = { GridItemSpan(maxLineSpan) }, key = "header") {
-                Header(adblockStatus, adblockEnabled, apps.size, callbacks.onSettings)
+                Header(adblockStatus, adblockEnabled, apps.size, callbacks.onSettings, callbacks.onToggleTheme, update, updateActions)
             }
             if (apps.isEmpty()) {
                 item(span = { GridItemSpan(maxLineSpan) }, key = "empty") {
@@ -206,7 +218,15 @@ fun HomeScreen(
 }
 
 @Composable
-private fun Header(status: AdblockEngine.Status, adblockEnabled: Boolean, count: Int, onSettings: () -> Unit) {
+private fun Header(
+    status: AdblockEngine.Status,
+    adblockEnabled: Boolean,
+    count: Int,
+    onSettings: () -> Unit,
+    onToggleTheme: () -> Unit,
+    update: UpdateState,
+    updateActions: UpdateActions,
+) {
     Column(Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 6.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
@@ -217,6 +237,8 @@ private fun Header(status: AdblockEngine.Status, adblockEnabled: Boolean, count:
                     style = ClayType.BodyMd, color = Clay.Muted,
                 )
             }
+            ThemeToggle(onToggleTheme)
+            Spacer(Modifier.width(10.dp))
             ClayIconButton(Icons.Rounded.Settings, "Settings", onSettings)
         }
         Spacer(Modifier.height(14.dp))
@@ -230,11 +252,37 @@ private fun Header(status: AdblockEngine.Status, adblockEnabled: Boolean, count:
             Modifier.clip(ClayShapes.Pill).background(color).padding(start = 10.dp, end = 14.dp, top = 6.dp, bottom = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(Icons.Rounded.Shield, null, tint = Clay.Ink, modifier = Modifier.size(16.dp))
+            val content = if (color == Clay.SurfaceCard) Clay.Ink else Clay.Black
+            Icon(Icons.Rounded.Shield, null, tint = content, modifier = Modifier.size(16.dp))
             Spacer(Modifier.width(6.dp))
-            Text(label, style = ClayType.Caption, color = Clay.Ink)
+            Text(label, style = ClayType.Caption, color = content)
+        }
+        // Keep the last update shown while the card animates away.
+        val shownUpdate = remember { LastValue(update) }
+        if (update.info != null) shownUpdate.value = update
+        AnimatedVisibility(
+            visible = update.info != null,
+            enter = expandVertically(ClayMotion.bouncy()) + fadeIn(),
+            exit = shrinkVertically() + fadeOut(),
+        ) {
+            UpdateCard(shownUpdate.value, updateActions, Modifier.padding(top = 14.dp))
         }
     }
+}
+
+private class LastValue<T>(var value: T)
+
+/** Sun/moon button: flips WebDroid between light and dark. */
+@Composable
+private fun ThemeToggle(onToggle: () -> Unit) {
+    val dark = Clay.isDark
+    val turn by animateFloatAsState(if (dark) 180f else 0f, ClayMotion.bouncy(), label = "theme-turn")
+    ClayIconButton(
+        if (dark) Icons.Rounded.LightMode else Icons.Rounded.DarkMode,
+        if (dark) "Switch to light mode" else "Switch to dark mode",
+        onToggle,
+        modifier = Modifier.graphicsLayer { rotationZ = turn },
+    )
 }
 
 fun formatCount(n: Int): String = when {
@@ -378,7 +426,7 @@ private fun AppActionsSheet(
             Box(
                 Modifier
                     .fillMaxSize()
-                    .background(Clay.Ink.copy(alpha = 0.34f))
+                    .background(Clay.Scrim)
                     .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { onDismiss() }
             )
         }

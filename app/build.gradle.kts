@@ -36,6 +36,9 @@ android {
         versionCode = gitCommitCount
         versionName = appVersionName
         vectorDrawables.useSupportLibrary = true
+        // OTA updates come from this repository's GitHub releases.
+        val updateRepo = System.getenv("GITHUB_REPOSITORY")?.takeIf { it.isNotBlank() } ?: "darshan260802/WebDroid"
+        buildConfigField("String", "UPDATE_REPO", "\"$updateRepo\"")
     }
 
     signingConfigs {

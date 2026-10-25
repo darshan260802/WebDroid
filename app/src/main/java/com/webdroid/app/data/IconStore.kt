@@ -12,6 +12,7 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.core.content.res.ResourcesCompat
 import com.webdroid.app.R
 import com.webdroid.app.ui.theme.CardColor
+import com.webdroid.app.ui.theme.ClayPalette
 import java.io.File
 import java.io.FileOutputStream
 
@@ -46,10 +47,14 @@ class IconStore(private val context: Context) {
      */
     fun renderTile(app: WebApp, sizePx: Int, adaptive: Boolean = false): Bitmap {
         val colors = CardColor.of(app.cardColor)
+        // Launcher, Recents and notification icons keep the light Clay look
+        // whatever theme WebDroid's own UI is in.
+        val background = if (colors == CardColor.Cream) ClayPalette.Light.surfaceCard else colors.background
+        val content = if (colors == CardColor.Cream) ClayPalette.Light.ink else colors.content
         val bitmap = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
         val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
-        paint.color = colors.background.toArgb()
+        paint.color = background.toArgb()
         if (adaptive) {
             canvas.drawRect(0f, 0f, sizePx.toFloat(), sizePx.toFloat(), paint)
         } else {
@@ -68,7 +73,7 @@ class IconStore(private val context: Context) {
         } else {
             val typeface = ResourcesCompat.getFont(context, R.font.inter_semibold) ?: Typeface.DEFAULT_BOLD
             paint.typeface = typeface
-            paint.color = colors.content.toArgb()
+            paint.color = content.toArgb()
             paint.textSize = inner * 0.9f
             paint.textAlign = Paint.Align.CENTER
             val letter = app.name.trim().firstOrNull()?.uppercaseChar()?.toString() ?: "W"

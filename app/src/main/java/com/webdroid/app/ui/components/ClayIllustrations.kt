@@ -75,19 +75,25 @@ private fun DrawScope.tile(center: Offset, size: Float, color: Color, angle: Flo
         clay(path, color, rect, shine = 0.45f)
         // little "window" on the tile
         drawRoundRect(
-            color = Clay.Canvas.copy(alpha = 0.9f),
+            color = Clay.Cream.copy(alpha = 0.9f),
             topLeft = Offset(rect.left + size * 0.22f, rect.top + size * 0.24f),
             size = Size(size * 0.56f, size * 0.14f),
             cornerRadius = CornerRadius(size * 0.07f),
         )
         drawRoundRect(
-            color = Clay.Canvas.copy(alpha = 0.6f),
+            color = Clay.Cream.copy(alpha = 0.6f),
             topLeft = Offset(rect.left + size * 0.22f, rect.top + size * 0.48f),
             size = Size(size * 0.36f, size * 0.14f),
             cornerRadius = CornerRadius(size * 0.07f),
         )
     }
 }
+
+private val STARS = listOf(
+    Triple(0.08f, 0.10f, 0.9f), Triple(0.34f, 0.07f, 0.6f), Triple(0.42f, 0.30f, 0.5f),
+    Triple(0.62f, 0.08f, 1f), Triple(0.90f, 0.12f, 0.7f), Triple(0.95f, 0.40f, 0.5f),
+    Triple(0.13f, 0.40f, 0.6f), Triple(0.70f, 0.48f, 0.4f),
+)
 
 /**
  * Hand-made-looking clay landscape: rolling peach/ochre/lavender hills, a pink
@@ -114,7 +120,15 @@ fun ClayHills(modifier: Modifier = Modifier, animated: Boolean = true) {
     Canvas(modifier) {
         val w = size.width
         val h = size.height
-        drawRect(Brush.verticalGradient(listOf(Color(0xFFFFF3DD), Color(0xFFFCE7CF))))
+        if (Clay.isDark) {
+            // Dusk: deep violet sky with a few stars.
+            drawRect(Brush.verticalGradient(listOf(Color(0xFF1C1828), Color(0xFF3A2A3C))))
+            STARS.forEach { (x, y, r) ->
+                drawCircle(Clay.Cream.copy(alpha = 0.35f + 0.4f * phase * r), r * h * 0.008f + 1f, Offset(w * x, h * y))
+            }
+        } else {
+            drawRect(Brush.verticalGradient(listOf(Color(0xFFFFF3DD), Color(0xFFFCE7CF))))
+        }
 
         // Sun
         val sunR = h * 0.13f
@@ -139,7 +153,7 @@ fun ClayHills(modifier: Modifier = Modifier, animated: Boolean = true) {
             cubicTo(w * 0.46f, h * 0.575f, w * 0.43f, h * 0.61f, w * 0.40f, h * 0.585f)
             close()
         }
-        clay(cap, Clay.Canvas, Rect(w * 0.40f, h * 0.53f, w * 0.56f, h * 0.61f), shine = 0.2f)
+        clay(cap, Clay.Cream, Rect(w * 0.40f, h * 0.53f, w * 0.56f, h * 0.61f), shine = 0.2f)
 
         // Mint ground
         val ground = Path().apply {

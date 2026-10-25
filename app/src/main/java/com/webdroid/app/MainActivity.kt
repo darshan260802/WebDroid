@@ -3,6 +3,8 @@ package com.webdroid.app
 import android.app.ActivityOptions
 import android.content.Intent
 import android.graphics.Bitmap
+import android.graphics.drawable.ColorDrawable
+import android.os.Build
 import android.os.Bundle
 import android.os.Looper
 import android.webkit.WebView
@@ -39,6 +41,7 @@ import com.webdroid.app.adblock.AdblockStorage
 import com.webdroid.app.adblock.FilterUpdateWorker
 import com.webdroid.app.data.AppSettings
 import com.webdroid.app.data.IconStore
+import com.webdroid.app.data.ThemeMode
 import com.webdroid.app.data.WebApp
 import com.webdroid.app.data.WebAppRepository
 import com.webdroid.app.ui.editor.EditorResult
@@ -47,6 +50,12 @@ import com.webdroid.app.ui.home.HomeCallbacks
 import com.webdroid.app.ui.home.HomeScreen
 import com.webdroid.app.ui.settings.SettingsScreen
 import com.webdroid.app.ui.theme.Clay
+import com.webdroid.app.ui.theme.ClayPalette
+import com.webdroid.app.ui.theme.ClayTheme
+import com.webdroid.app.ui.update.UpdateActions
+import com.webdroid.app.ui.update.info
+import com.webdroid.app.update.AppUpdater
+import com.webdroid.app.update.UpdateState
 import com.webdroid.app.ui.theme.WebDroidTheme
 import com.webdroid.app.web.AppLock
 import com.webdroid.app.web.ShortcutHelper
@@ -71,12 +80,12 @@ class MainActivity : ComponentActivity() {
     private var screen by mutableStateOf<Screen>(Screen.Home)
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        enableEdgeToEdge(
-            statusBarStyle = SystemBarStyle.light(Clay.Canvas.toArgb(), Clay.Canvas.toArgb()),
-            navigationBarStyle = SystemBarStyle.light(android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT),
-        )
+        ClayTheme.prime(this)
+        applyWindowTheme(Clay.isDark)
         super.onCreate(savedInstanceState)
+        AppUpdater.restore(this)
         handleIntent(intent)
+        AppUpdater.checkIfDue(this)
 
         // Checked lazily: querying WebView features loads Chromium.
         val isolatedSupported by lazy { WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE) }
@@ -84,6 +93,22 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             WebDroidTheme {
+                val dark = Clay.isDark
+                LaunchedEffect(dark) { applyWindowTheme(dark) }
+                val update by AppUpdater.state.collectAsStateWithLifecycle()
+                val snoozeTick by AppUpdater.snoozeTick.collectAsStateWithLifecycle()
+                val homeUpdate = remember(update, snoozeTick) {
+                    val info = update.info
+                    if (info != null && !AppUpdater.isSnoozed(this@MainActivity, info)) update else UpdateState.Idle
+                }
+                val updateActions = remember {
+                    UpdateActions(
+                        install = { AppUpdater.install(this@MainActivity) },
+                        download = { AppUpdater.download(this@MainActivity) },
+                        checkNow = { AppUpdater.checkNow(this@MainActivity) },
+                        later = { AppUpdater.snooze(this@MainActivity) },
+                    )
+                }
                 val apps by repo.apps.collectAsStateWithLifecycle()
                 val status by AdblockEngine.status.collectAsStateWithLifecycle()
                 val settingsState by AppSettings.get(this).state.collectAsStateWithLifecycle()
@@ -129,12 +154,20 @@ class MainActivity : ComponentActivity() {
                                 icons = iconsById,
                                 adblockStatus = status,
                                 adblockEnabled = settingsState.adBlockEnabled,
+                                update = homeUpdate,
+                                updateActions = updateActions,
                                 callbacks = HomeCallbacks(
                                     onOpen = { app, bounds -> openApp(app, bounds) },
                                     onCreate = { screen = Screen.Editor(null) },
                                     onCreateFrom = { url -> screen = Screen.Editor(null, url) },
                                     onEdit = { screen = Screen.Editor(it.id) },
                                     onSettings = { screen = Screen.Settings },
+                                    onToggleTheme = {
+                                        val nowDark = Clay.isDark
+                                        AppSettings.get(this@MainActivity).update {
+                                            it.copy(themeMode = if (nowDark) ThemeMode.LIGHT else ThemeMode.DARK)
+                                        }
+                                    },
                                     onPin = { app ->
                                         if (!ShortcutHelper.pin(this@MainActivity, app)) {
                                             android.widget.Toast.makeText(this@MainActivity, "Your launcher doesn't support shortcuts", android.widget.Toast.LENGTH_SHORT).show()
@@ -168,6 +201,9 @@ class MainActivity : ComponentActivity() {
                                 lastUpdated = getSharedPreferences("webdroid", MODE_PRIVATE).getLong("filters_updated_at", 0L),
                                 onUpdate = { transform -> AppSettings.get(this@MainActivity).update(transform) },
                                 onUpdateFilters = { FilterUpdateWorker.updateNow(this@MainActivity) },
+                                update = update,
+                                updateLastChecked = remember(update) { AppUpdater.lastCheckedAt(this@MainActivity) },
+                                updateActions = updateActions,
                                 onBack = { screen = Screen.Home },
                             )
                         }
@@ -188,10 +224,40 @@ class MainActivity : ComponentActivity() {
         handleIntent(intent)
     }
 
+    override fun onResume() {
+        super.onResume()
+        AppUpdater.onResume(this)
+    }
+
     private fun handleIntent(intent: Intent?) {
-        val editId = intent?.getStringExtra(EXTRA_EDIT_APP) ?: return
+        if (intent == null) return
+        if (intent.getBooleanExtra(AppUpdater.EXTRA_INSTALL_UPDATE, false)) {
+            intent.removeExtra(AppUpdater.EXTRA_INSTALL_UPDATE)
+            screen = Screen.Home
+            AppUpdater.install(this)
+        }
+        val editId = intent.getStringExtra(EXTRA_EDIT_APP) ?: return
         if (repo.get(editId) != null) screen = Screen.Editor(editId)
         intent.removeExtra(EXTRA_EDIT_APP)
+    }
+
+    /** System bar icons, window background and next launch's splash follow WebDroid's theme. */
+    private fun applyWindowTheme(dark: Boolean) {
+        val canvas = (if (dark) ClayPalette.Dark else ClayPalette.Light).canvas.toArgb()
+        val transparent = android.graphics.Color.TRANSPARENT
+        enableEdgeToEdge(
+            statusBarStyle = if (dark) SystemBarStyle.dark(canvas) else SystemBarStyle.light(canvas, canvas),
+            navigationBarStyle = if (dark) SystemBarStyle.dark(transparent) else SystemBarStyle.light(transparent, transparent),
+        )
+        window.setBackgroundDrawable(ColorDrawable(canvas))
+        if (Build.VERSION.SDK_INT >= 33) {
+            val splash = when (AppSettings.get(this).state.value.themeMode) {
+                ThemeMode.LIGHT -> R.style.Theme_WebDroid_Light
+                ThemeMode.DARK -> R.style.Theme_WebDroid_Dark
+                ThemeMode.SYSTEM -> R.style.Theme_WebDroid
+            }
+            runCatching { splashScreen.setSplashScreenTheme(splash) }
+        }
     }
 
     private fun openApp(app: WebApp, bounds: Rect?) {

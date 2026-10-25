@@ -9,6 +9,25 @@
         <item name="android:colorAccent">@color/ink</item>
     </style>
 
+    <!-- Explicit light/dark variants for when the user overrides the system theme. -->
+    <style name="Theme.WebDroid.Light" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/canvas</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
+        <item name="android:colorAccent">@color/ink</item>
+    </style>
+
+    <style name="Theme.WebDroid.Dark" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/canvas_dark</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+        <item name="android:colorAccent">@color/ink_dark</item>
+    </style>
+
     <!-- Web apps follow the system light/dark mode so prefers-color-scheme works. -->
     <style name="Theme.WebDroid.WebApp" parent="android:Theme.Material.Light.NoActionBar">
         <item name="android:windowBackground">@color/web_light</item>

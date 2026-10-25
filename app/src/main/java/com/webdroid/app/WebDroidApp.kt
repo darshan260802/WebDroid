@@ -13,6 +13,8 @@ import com.webdroid.app.adblock.AdblockEngine
 import com.webdroid.app.adblock.FilterUpdateWorker
 import com.webdroid.app.adblock.RequestFilter
 import com.webdroid.app.data.AppSettings
+import com.webdroid.app.ui.theme.ClayTheme
+import com.webdroid.app.update.UpdateWorker
 
 class WebDroidApp : Application() {
     override fun onCreate() {
@@ -20,6 +22,8 @@ class WebDroidApp : Application() {
         // Start loading uBO's engine immediately, off the main thread.
         AdblockEngine.init(this)
         FilterUpdateWorker.schedule(this)
+        UpdateWorker.schedule(this)
+        ClayTheme.prime(this)
     }
 
     @Volatile private var webViewSetupDone = false

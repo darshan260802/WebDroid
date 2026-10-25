@@ -27,6 +27,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Code
+import androidx.compose.material.icons.rounded.DarkMode
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.PictureInPicture
@@ -51,6 +52,7 @@ import com.webdroid.app.adblock.AdblockEngine
 import com.webdroid.app.adblock.FilterListInfo
 import com.webdroid.app.data.FitMode
 import com.webdroid.app.data.GlobalSettings
+import com.webdroid.app.data.ThemeMode
 import com.webdroid.app.ui.components.ClayButton
 import com.webdroid.app.ui.components.ClayButtonStyle
 import com.webdroid.app.ui.components.ClayIconButton
@@ -62,6 +64,9 @@ import com.webdroid.app.ui.home.formatCount
 import com.webdroid.app.ui.theme.Clay
 import com.webdroid.app.ui.theme.ClayShapes
 import com.webdroid.app.ui.theme.ClayType
+import com.webdroid.app.ui.update.UpdateActions
+import com.webdroid.app.ui.update.UpdateSettingsSection
+import com.webdroid.app.update.UpdateState
 
 @Composable
 fun SettingsScreen(
@@ -71,6 +76,9 @@ fun SettingsScreen(
     lastUpdated: Long,
     onUpdate: ((GlobalSettings) -> GlobalSettings) -> Unit,
     onUpdateFilters: () -> Unit,
+    update: UpdateState,
+    updateLastChecked: Long,
+    updateActions: UpdateActions,
     onBack: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -103,7 +111,7 @@ fun SettingsScreen(
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(Modifier.size(48.dp).clip(ClayShapes.Lg).background(Clay.Mint), contentAlignment = Alignment.Center) {
-                        Icon(Icons.Rounded.Shield, null, tint = Clay.Ink, modifier = Modifier.size(26.dp))
+                        Icon(Icons.Rounded.Shield, null, tint = Clay.Black, modifier = Modifier.size(26.dp))
                     }
                     Spacer(Modifier.width(14.dp))
                     Column(Modifier.weight(1f)) {
@@ -153,6 +161,24 @@ fun SettingsScreen(
                 ClaySwitchRow(
                     "Block ads everywhere", "Master switch. Each app can also turn it off.",
                     settings.adBlockEnabled, { v -> onUpdate { it.copy(adBlockEnabled = v) } },
+                )
+            }
+
+            Spacer(Modifier.height(26.dp))
+            SectionLabel("Appearance")
+            Spacer(Modifier.height(8.dp))
+            ClaySegmented(
+                options = listOf(ThemeMode.SYSTEM to "System", ThemeMode.LIGHT to "Light", ThemeMode.DARK to "Dark"),
+                selected = settings.themeMode,
+                onSelect = { mode -> onUpdate { it.copy(themeMode = mode) } },
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Row(Modifier.padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Rounded.DarkMode, null, tint = Clay.Muted, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    "Applies to WebDroid's own screens and menus. Websites follow your phone's setting; turn on “Force dark” in an app's settings to darken one.",
+                    style = ClayType.Caption, color = Clay.Muted,
                 )
             }
 
@@ -252,6 +278,11 @@ fun SettingsScreen(
             }
 
             Spacer(Modifier.height(26.dp))
+            SectionLabel("Updates")
+            Spacer(Modifier.height(8.dp))
+            UpdateSettingsSection(update, updateLastChecked, settings, onUpdate, updateActions)
+
+            Spacer(Modifier.height(26.dp))
             SectionLabel("About")
             Spacer(Modifier.height(8.dp))
             Column(
@@ -261,11 +292,11 @@ fun SettingsScreen(
                     .background(Clay.Lavender)
                     .padding(22.dp),
             ) {
-                Text("WebDroid ${BuildConfig.VERSION_NAME}", style = ClayType.TitleMd, color = Clay.Ink)
+                Text("WebDroid ${BuildConfig.VERSION_NAME}", style = ClayType.TitleMd, color = Clay.Black)
                 Spacer(Modifier.height(6.dp))
                 Text(
                     "Free software under the GNU GPL v3. Ad blocking uses uBlock Origin's engine by Raymond Hill and contributors; filter lists by the uBlock Origin, EasyList, Peter Lowe and malware-filter teams.",
-                    style = ClayType.BodySm, color = Clay.Ink,
+                    style = ClayType.BodySm, color = Clay.Black,
                 )
                 Spacer(Modifier.height(14.dp))
                 Row(
