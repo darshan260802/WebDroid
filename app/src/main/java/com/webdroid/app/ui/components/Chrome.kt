@@ -61,6 +61,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.composed
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
@@ -461,7 +462,7 @@ fun BoxScope.GlassToast(backdrop: GlassBackdrop?, message: String?, bottomPaddin
 }
 
 /** clickable() without ripple or press indication (callers draw their own). */
-fun Modifier.clickableNoIndication(role: Role = Role.Button, onClick: () -> Unit): Modifier = androidx.compose.ui.composed {
+fun Modifier.clickableNoIndication(role: Role = Role.Button, onClick: () -> Unit): Modifier = composed {
     clickable(
         interactionSource = remember { MutableInteractionSource() },
         indication = null,

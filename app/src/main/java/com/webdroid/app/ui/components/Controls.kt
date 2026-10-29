@@ -44,6 +44,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.composed
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
@@ -101,7 +102,7 @@ fun Modifier.trackPress(state: PressState, enabled: Boolean = true): Modifier =
     }
 
 /** Shrinks slightly while pressed (springs back on release). */
-fun Modifier.pressScale(state: PressState, pressed: Float = 0.96f): Modifier = androidx.compose.ui.composed {
+fun Modifier.pressScale(state: PressState, pressed: Float = 0.96f): Modifier = composed {
     val value by animateFloatAsState(if (state.pressed) pressed else 1f, Motion.snappy(), label = "press")
     // Read in the layer block: the press animates without recomposing.
     graphicsLayer { scaleX = value; scaleY = value }
@@ -114,7 +115,7 @@ fun Modifier.tappable(
     role: Role = Role.Button,
     haptic: Boolean = true,
     onClick: () -> Unit,
-): Modifier = androidx.compose.ui.composed {
+): Modifier = composed {
     val haptics = rememberHaptics()
     this
         .trackPress(state, enabled)
