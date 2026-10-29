@@ -739,12 +739,15 @@ class WebAppActivity : FragmentActivity(), WebAppActions {
         override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
             if (!request.isForMainFrame) return
             val code = error.errorCode
+            // A VPN problem (say, no Tor exits in the app's country) explains the failure best.
+            val vpnProblem = if (vpnAttached) app?.let { VpnManager.problemFor(this@WebAppActivity, it) } else null
             if (code == ERROR_HOST_LOOKUP || code == ERROR_CONNECT || code == ERROR_TIMEOUT ||
-                code == ERROR_PROXY_AUTHENTICATION || code == ERROR_FAILED_SSL_HANDSHAKE || code == ERROR_IO
+                code == ERROR_PROXY_AUTHENTICATION || code == ERROR_FAILED_SSL_HANDSHAKE || code == ERROR_IO ||
+                (vpnProblem != null && code == ERROR_UNKNOWN)
             ) {
                 ui.error = PageError(
                     request.url.toString(),
-                    when (code) {
+                    vpnProblem ?: when (code) {
                         ERROR_HOST_LOOKUP -> "Check your connection and try again."
                         ERROR_TIMEOUT -> "The site took too long to respond."
                         ERROR_FAILED_SSL_HANDSHAKE -> "A secure connection couldn't be established."
@@ -1520,7 +1523,7 @@ class WebAppActivity : FragmentActivity(), WebAppActions {
                     val current = app
                     if (vpnAttached && current != null) {
                         // The system downloader would bypass this app's VPN.
-                        ui.showToast("Downloading through ${VpnProfiles.get(this).label(current.settings.vpn) ?: "the VPN"}…")
+                        ui.showToast("Downloading through ${VpnProfiles.get(this).labelFor(current.settings) ?: "the VPN"}…")
                         val client = VpnManager.httpClient(this, current).newBuilder().cookieJar(WebViewCookieJar(cookieManager())).build()
                         val referer = ui.url
                         lifecycleScope.launch {
@@ -1605,7 +1608,7 @@ class WebAppActivity : FragmentActivity(), WebAppActions {
         val o = old.settings
         val n = new.settings
         val view = webView
-        if (o.vpn != n.vpn) {
+        if (o.vpn != n.vpn || (n.vpn == VpnProfiles.TOR_ID && o.torCountry != n.torCountry)) {
             vpnAttached = false
             view?.stopLoading()
             if (n.vpn != null) watchVpnStatus(new) else ui.vpnStatus = null
@@ -1616,7 +1619,7 @@ class WebAppActivity : FragmentActivity(), WebAppActions {
                     ui.error = PageError(new.url, message ?: "The VPN isn't available")
                 } else {
                     ui.error = null
-                    ui.showToast(VpnProfiles.get(this).label(n.vpn)?.let { "Now using $it" } ?: "VPN off for ${new.name}")
+                    ui.showToast(VpnProfiles.get(this).labelFor(n)?.let { "Now using $it" } ?: "VPN off for ${new.name}")
                     view?.reload()
                 }
             }

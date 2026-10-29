@@ -55,6 +55,8 @@ object VpnManager {
     private val routes = ConcurrentHashMap<String, String>()
     /** Domains each app was seen loading from (persisted). */
     private val learned = ConcurrentHashMap<String, MutableSet<String>>()
+    /** Tor upstreams in use ("tor", "tor:de"...), set up once Tor's SOCKS port is known. */
+    private val torUpstreams = ConcurrentHashMap.newKeySet<String>()
 
     private val lock = ReentrantLock()
     private val appliedChanged = lock.newCondition()
@@ -94,9 +96,10 @@ object VpnManager {
     /** The upstream an app routes through, or null for a direct app. */
     fun upstreamFor(context: Context, app: WebApp): String? {
         val choice = app.settings.vpn ?: return null
+        val profiles = VpnProfiles.get(context)
         return when {
-            choice == VpnProfiles.TOR_ID -> VpnProfiles.TOR_ID
-            VpnProfiles.get(context).get(choice) != null -> "p_$choice"
+            choice == VpnProfiles.TOR_ID -> VpnProfiles.torUpstream(profiles.torExitFor(app.settings))
+            profiles.get(choice) != null -> "p_$choice"
             else -> null
         }
     }
@@ -163,16 +166,24 @@ object VpnManager {
         rebuildRoutes()
         requestApply()
         val stillUsed = openApps.values.map { it.first }.toSet()
-        if (entry.first !in stillUsed) {
-            if (entry.first == VpnProfiles.TOR_ID) TorController.idle() else runCatching { Vpncore.removeUpstream(entry.first) }
+        if (entry.first !in stillUsed) release(entry.first)
+    }
+
+    /** Closes an upstream no open app uses any more. */
+    private fun release(id: String) {
+        runCatching { Vpncore.removeUpstream(id) }
+        if (VpnProfiles.isTor(id)) {
+            torUpstreams.remove(id)
+            if (torUpstreams.isEmpty()) TorController.idle()
         }
     }
 
-    /** The app's VPN choice changed while it's open. */
+    /** The app's VPN choice (or Tor exit country) changed while it's open. */
     fun reattach(context: Context, old: WebApp, new: WebApp, onReady: (ok: Boolean, message: String?) -> Unit) {
-        if (openApps.containsKey(old.id)) {
-            openApps.remove(old.id)
+        val previous = openApps.remove(old.id)
+        if (previous != null) {
             rebuildRoutes()
+            if (openApps.values.none { it.first == previous.first }) release(previous.first)
         }
         if (new.settings.vpn == null) {
             requestApply()
@@ -183,19 +194,51 @@ object VpnManager {
     }
 
     private fun configureUpstream(context: Context, id: String): String? {
-        if (id == VpnProfiles.TOR_ID) {
-            TorController.onSocksPort = { torPort ->
-                runCatching { Vpncore.setUpstream(VpnProfiles.TOR_ID, "socks5", "127.0.0.1:$torPort") }
-            }
+        if (VpnProfiles.isTor(id)) {
+            torUpstreams.add(id)
+            TorController.onSocksPort = { torPort -> applyTorUpstreams(context, torPort) }
             main.post { TorController.start(context) }
-            TorController.status.value.socksPort.takeIf { it > 0 }?.let { torPort ->
-                runCatching { Vpncore.setUpstream(VpnProfiles.TOR_ID, "socks5", "127.0.0.1:$torPort") }
-            }
+            TorController.status.value.socksPort.takeIf { it > 0 }?.let { applyTorUpstreams(context, it) }
             return null
         }
         val profile = VpnProfiles.get(context).get(id.removePrefix("p_")) ?: return "This app's VPN profile was deleted."
         return runCatching { Vpncore.setUpstream(id, profile.kind, profile.config) }
             .exceptionOrNull()?.let { "${profile.name}: ${it.message ?: "invalid configuration"}" }
+    }
+
+    /**
+     * Points every Tor upstream at Tor's SOCKS port. Upstreams with an exit
+     * country have the core steer their streams through Tor's controller.
+     */
+    private fun applyTorUpstreams(context: Context, torPort: Int) {
+        TorController.controlPaths(context)?.let { (socket, geoIp) ->
+            runCatching { Vpncore.setTorControl(socket, geoIp) }
+        }
+        torUpstreams.forEach { id ->
+            runCatching { Vpncore.setTorUpstream(id, "127.0.0.1:$torPort", id.substringAfter(':', "")) }
+        }
+    }
+
+    /** The default Tor exit country changed: move open apps that follow it. */
+    fun torDefaultChanged(context: Context) {
+        val ctx = context.applicationContext
+        val repo = com.webdroid.app.data.WebAppRepository.get(ctx)
+        val moved = mutableSetOf<String>()
+        openApps.forEach { (appId, entry) ->
+            if (!VpnProfiles.isTor(entry.first)) return@forEach
+            val app = repo.get(appId) ?: return@forEach
+            val next = upstreamFor(ctx, app) ?: return@forEach
+            if (next != entry.first) {
+                openApps[appId] = next to entry.second
+                moved += entry.first
+                configureUpstream(ctx, next)
+            }
+        }
+        if (moved.isEmpty()) return
+        rebuildRoutes()
+        requestApply()
+        val used = openApps.values.map { it.first }.toSet()
+        moved.filterNot { it in used }.forEach { release(it) }
     }
 
     /** Re-applies a profile after it was edited. */
@@ -344,10 +387,12 @@ object VpnManager {
     suspend fun check(context: Context, choice: String): CheckResult = withContext(Dispatchers.IO) {
         appContext = context.applicationContext
         if (!ensureRouter()) return@withContext CheckResult(null, null, "The VPN couldn't start on this device.")
-        val id = if (choice == VpnProfiles.TOR_ID) VpnProfiles.TOR_ID else "p_$choice"
+        val id = if (choice == VpnProfiles.TOR_ID) {
+            VpnProfiles.torUpstream(VpnProfiles.get(context).tor.value.exitCountry)
+        } else "p_$choice"
         configureUpstream(context.applicationContext, id)?.let { return@withContext CheckResult(null, null, it) }
         try {
-            val body = Vpncore.check(id, CHECK_URL, if (id == VpnProfiles.TOR_ID) 120L else 30L)
+            val body = Vpncore.check(id, CHECK_URL, if (VpnProfiles.isTor(id)) 120L else 30L)
             val fields = body.lineSequence().mapNotNull { line ->
                 val i = line.indexOf('=')
                 if (i > 0) line.substring(0, i) to line.substring(i + 1) else null
@@ -357,15 +402,22 @@ object VpnManager {
             CheckResult(null, null, e.message ?: "Couldn't connect")
         } finally {
             // Keep upstreams only for open apps.
-            if (openApps.values.none { it.first == id }) {
-                if (id == VpnProfiles.TOR_ID) TorController.idle() else runCatching { Vpncore.removeUpstream(id) }
-            }
+            if (openApps.values.none { it.first == id }) release(id)
         }
     }
 
     /** Validates a WireGuard config; returns an error message or null. */
     fun validateWireGuard(config: String): String? =
         runCatching { Vpncore.validateWireGuard(config) }.exceptionOrNull()?.message
+
+    /** What's wrong with an open app's VPN right now, if anything. */
+    fun problemFor(context: Context, app: WebApp): String? {
+        val id = openApps[app.id]?.first ?: upstreamFor(context, app) ?: return null
+        val upstream = (statusJson()?.get("upstreams") as? JsonObject)?.get(id) as? JsonObject ?: return null
+        val state = (upstream["state"] as? kotlinx.serialization.json.JsonPrimitive)?.content
+        val error = (upstream["error"] as? kotlinx.serialization.json.JsonPrimitive)?.content
+        return error?.takeIf { state == "error" && it.isNotBlank() }?.replaceFirstChar { it.uppercase() }
+    }
 
     fun statusJson(): JsonObject? = runCatching {
         Json.parseToJsonElement(Vpncore.status()) as? JsonObject

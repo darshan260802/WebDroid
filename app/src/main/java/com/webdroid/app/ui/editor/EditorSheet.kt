@@ -33,6 +33,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.ContentPaste
 import androidx.compose.material.icons.rounded.DarkMode
@@ -93,6 +94,7 @@ import com.webdroid.app.ui.components.ButtonStyle
 import com.webdroid.app.ui.components.ChoiceRow
 import com.webdroid.app.ui.components.ConfirmationSheet
 import com.webdroid.app.ui.components.ContextMenu
+import com.webdroid.app.ui.components.ListRow
 import com.webdroid.app.ui.components.ListSection
 import com.webdroid.app.ui.components.MenuAction
 import com.webdroid.app.ui.components.ModalSheet
@@ -105,6 +107,7 @@ import com.webdroid.app.ui.components.rememberHaptics
 import com.webdroid.app.ui.components.rememberPressState
 import com.webdroid.app.ui.components.rememberSnapshotBackdrop
 import com.webdroid.app.ui.components.tappable
+import com.webdroid.app.ui.privacy.flag
 import com.webdroid.app.ui.theme.AppColors
 import com.webdroid.app.ui.theme.AppType
 import com.webdroid.app.ui.theme.Motion
@@ -517,7 +520,11 @@ private fun EditorContent(
         }
 
         SectionGap()
-        VpnChoices(s.vpn) { state.settings = state.settings.copy(vpn = it) }
+        VpnChoices(
+            s.vpn, s.torCountry,
+            onSelect = { state.settings = state.settings.copy(vpn = it) },
+            onTorCountry = { state.settings = state.settings.copy(torCountry = it) },
+        )
 
         if (existing != null) {
             SectionGap()
@@ -620,24 +627,82 @@ private fun Swatches(selected: Int, onSelect: (Int) -> Unit) {
     }
 }
 
-/** Direct, Tor or a saved profile, for one app. */
+/**
+ * Direct, Tor or a saved profile, for one app. With Tor, the app can also
+ * leave the Tor network in its own country ([torCountry], see
+ * [com.webdroid.app.data.WebAppSettings.torCountry]).
+ */
 @Composable
-fun VpnChoices(selected: String?, onSelect: (String?) -> Unit) {
+fun VpnChoices(
+    selected: String?,
+    torCountry: String,
+    onSelect: (String?) -> Unit,
+    onTorCountry: (String) -> Unit,
+) {
     val store = VpnProfiles.get(LocalContext.current)
     val profiles by store.profiles.collectAsState()
     val tor by store.tor.collectAsState()
+    var picking by remember { mutableStateOf(false) }
     val missing = selected != null && selected != VpnProfiles.TOR_ID && profiles.none { it.id == selected }
+    val defaultLabel = tor.exitCountry.takeIf { it.isNotEmpty() }?.let { "${flag(it)}  ${VpnProfiles.countryName(it)}" } ?: "Any Country"
+    fun countryLabel(code: String): String = when (code) {
+        "" -> "Default ($defaultLabel)"
+        VpnProfiles.ANY_COUNTRY -> "Any Country"
+        else -> "${flag(code)}  ${VpnProfiles.countryName(code)}"
+    }
     ListSection(
         header = "VPN",
-        footer = "Only this app’s websites use the VPN; everything else stays direct. Add WireGuard configs and proxies in the Privacy tab.",
+        footer = if (selected == VpnProfiles.TOR_ID) {
+            "Sites see this app as visiting from its exit country; other apps can use other countries at the same time. Countries with few relays are slower."
+        } else {
+            "Only this app’s websites use the VPN; everything else stays direct. Add WireGuard configs and proxies in the Privacy tab."
+        },
     ) {
         row(16.dp) { ChoiceRow("Direct", selected == null, { onSelect(null) }) }
-        row(16.dp) {
-            val country = tor.exitCountry.takeIf { it.isNotEmpty() }?.uppercase()
-            ChoiceRow(
-                "Tor", selected == VpnProfiles.TOR_ID, { onSelect(VpnProfiles.TOR_ID) },
-                subtitle = listOfNotNull("Free and private, but slower", country?.let { "exits in $it" }).joinToString(" · "),
-            )
+        row(if (selected == VpnProfiles.TOR_ID) 32.dp else 16.dp) {
+            ChoiceRow("Tor", selected == VpnProfiles.TOR_ID, { onSelect(VpnProfiles.TOR_ID) }, subtitle = "Free and private, but slower")
+        }
+        if (selected == VpnProfiles.TOR_ID) {
+            row(if (picking) 32.dp else 16.dp) {
+                val turn by animateFloatAsState(if (picking) 90f else 0f, Motion.snappy(), label = "country-chevron")
+                ListRow(
+                    "Exit Country",
+                    modifier = Modifier.padding(start = 16.dp),
+                    onClick = { picking = !picking },
+                    trailing = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                when (torCountry) {
+                                    "" -> "Default"
+                                    VpnProfiles.ANY_COUNTRY -> "Any"
+                                    else -> "${flag(torCountry)} ${torCountry.uppercase()}"
+                                },
+                                style = AppType.Body, color = AppColors.SecondaryLabel, maxLines = 1,
+                            )
+                            Icon(
+                                Icons.AutoMirrored.Rounded.KeyboardArrowRight, null,
+                                tint = AppColors.TertiaryLabel,
+                                modifier = Modifier.padding(start = 4.dp).size(22.dp).graphicsLayer { rotationZ = turn },
+                            )
+                        }
+                    },
+                )
+            }
+            if (picking) {
+                val codes = listOf("", VpnProfiles.ANY_COUNTRY) + VpnProfiles.TOR_COUNTRIES.map { it.first }.filter { it.isNotEmpty() }
+                codes.forEachIndexed { i, code ->
+                    row(if (i == codes.lastIndex) 16.dp else 32.dp) {
+                        ChoiceRow(
+                            countryLabel(code), torCountry == code,
+                            {
+                                onTorCountry(code)
+                                picking = false
+                            },
+                            modifier = Modifier.padding(start = 16.dp),
+                        )
+                    }
+                }
+            }
         }
         profiles.forEach { profile ->
             row(16.dp) {

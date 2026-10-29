@@ -32,6 +32,12 @@ data class WebAppSettings(
      */
     val vpn: String? = null,
     /**
+     * Where this app leaves Tor: "" follows the default in Privacy › Tor,
+     * [com.webdroid.app.vpn.VpnProfiles.ANY_COUNTRY] lets Tor choose, or a
+     * country code such as "de".
+     */
+    val torCountry: String = "",
+    /**
      * Per-origin decisions: "camera:", "mic:", "location:" and "notify:" grants,
      * "notify-block:" denials, followed by the origin.
      */

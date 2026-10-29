@@ -208,7 +208,8 @@ func mustPort(p string) uint16 {
 // wgUpstream is a userspace WireGuard tunnel (gVisor netstack): no system
 // VPN, no root; only connections WebDroid sends to it use the tunnel.
 type wgUpstream struct {
-	cfg *wgConfig
+	cfg  *wgConfig
+	text string
 
 	mu       sync.Mutex
 	dev      *device.Device
@@ -223,7 +224,7 @@ func newWireGuard(text string) (*wgUpstream, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &wgUpstream{cfg: cfg}, nil
+	return &wgUpstream{cfg: cfg, text: strings.TrimSpace(text)}, nil
 }
 
 func (w *wgUpstream) ensure(ctx context.Context) (*netstack.Net, error) {
@@ -271,6 +272,8 @@ func (w *wgUpstream) Dial(ctx context.Context, network, addr string) (net.Conn, 
 	}
 	return w.counters.wrap(c), nil
 }
+
+func (w *wgUpstream) spec() string { return "wireguard|" + w.text }
 
 func (w *wgUpstream) Close() {
 	w.mu.Lock()

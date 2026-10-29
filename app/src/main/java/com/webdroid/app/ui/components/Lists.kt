@@ -216,13 +216,13 @@ fun ToggleRow(
 
 /** A single-choice row with a checkmark. */
 @Composable
-fun ChoiceRow(title: String, selected: Boolean, onClick: () -> Unit, subtitle: String? = null) {
+fun ChoiceRow(title: String, selected: Boolean, onClick: () -> Unit, subtitle: String? = null, modifier: Modifier = Modifier) {
     ListRow(
         title = title,
         subtitle = subtitle,
         role = Role.RadioButton,
         onClick = onClick,
-        modifier = Modifier.semantics { this.selected = selected },
+        modifier = modifier.semantics { this.selected = selected },
         trailing = {
             if (selected) Icon(Icons.Rounded.Check, null, tint = AppColors.Accent, modifier = Modifier.size(22.dp))
             else Spacer(Modifier.size(22.dp))

@@ -585,7 +585,7 @@ private fun BoxScope.MenuSheet(app: WebApp, icon: Bitmap?, state: WebAppUiState,
                 row { ListRow("Open in Browser", icon = Icons.AutoMirrored.Rounded.OpenInNew, iconBackground = Green, onClick = { close(); actions.openInBrowser() }) }
             }
             SectionGap(24.dp)
-            val vpnLabel = VpnProfiles.get(LocalContext.current).label(app.settings.vpn)
+            val vpnLabel = VpnProfiles.get(LocalContext.current).labelFor(app.settings)
             ListSection {
                 row {
                     ToggleRow(
@@ -772,7 +772,11 @@ private fun BoxScope.SettingsSheet(
                 }
             }
             SectionGap()
-            VpnChoices(s.vpn) { choice -> actions.updateSettings { it.copy(vpn = choice) } }
+            VpnChoices(
+                s.vpn, s.torCountry,
+                onSelect = { choice -> actions.updateSettings { it.copy(vpn = choice) } },
+                onTorCountry = { code -> actions.updateSettings { it.copy(torCountry = code) } },
+            )
             SectionGap()
             ListSection {
                 row { ListRow("Edit Name, Icon & Color", icon = Icons.Rounded.Edit, iconBackground = Blue, chevron = true, onClick = { close(); actions.editApp() }) }

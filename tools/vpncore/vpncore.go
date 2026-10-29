@@ -47,6 +47,7 @@ func Stop() {
 		r.stop()
 	}
 	r, port = nil, 0
+	stopSteering()
 }
 
 func current() (*router, error) {
@@ -93,6 +94,7 @@ func ValidateWireGuard(config string) error {
 func RemoveUpstream(id string) {
 	if rt, err := current(); err == nil {
 		rt.setUpstream(id, nil)
+		updateSteering(rt)
 	}
 }
 
@@ -116,6 +118,7 @@ func SetRules(rules string) error {
 	rt.mu.Lock()
 	rt.rules = clean
 	rt.mu.Unlock()
+	rt.closeStale()
 	return nil
 }
 
@@ -130,8 +133,12 @@ func AddRule(domain, id string) {
 		return
 	}
 	rt.mu.Lock()
+	changed := rt.rules[domain] != id
 	rt.rules[domain] = id
 	rt.mu.Unlock()
+	if changed {
+		rt.closeStale()
+	}
 }
 
 // Route returns the upstream id a host goes to ("" when direct).

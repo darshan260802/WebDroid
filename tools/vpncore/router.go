@@ -32,6 +32,17 @@ type router struct {
 
 	active atomic.Int64
 	direct directUpstream
+
+	tunMu   sync.Mutex
+	tunnels map[*liveTunnel]struct{}
+}
+
+// liveTunnel is an open CONNECT tunnel and the upstream it went out through.
+type liveTunnel struct {
+	host           string
+	id             string
+	u              upstream
+	client, remote net.Conn
 }
 
 func newRouter() *router {
@@ -40,6 +51,7 @@ func newRouter() *router {
 		upstreams:  map[string]upstream{},
 		transports: map[string]*http.Transport{},
 		changed:    make(chan struct{}),
+		tunnels:    map[*liveTunnel]struct{}{},
 	}
 }
 
@@ -104,9 +116,21 @@ func (r *router) routeFor(host string) (string, bool) {
 	return "", false
 }
 
+// sameSpec reports whether two upstreams are configured identically.
+func sameSpec(a, b upstream) bool {
+	sa, ok1 := a.(interface{ spec() string })
+	sb, ok2 := b.(interface{ spec() string })
+	return ok1 && ok2 && sa.spec() == sb.spec()
+}
+
 func (r *router) setUpstream(id string, u upstream) {
 	r.mu.Lock()
 	if old, ok := r.upstreams[id]; ok {
+		if u != nil && sameSpec(old, u) {
+			// Unchanged: keep the running tunnel and its connections.
+			r.mu.Unlock()
+			return
+		}
 		old.Close()
 	}
 	if t, ok := r.transports[id]; ok {
@@ -121,6 +145,36 @@ func (r *router) setUpstream(id string, u upstream) {
 	close(r.changed)
 	r.changed = make(chan struct{})
 	r.mu.Unlock()
+	r.closeStale()
+}
+
+// closeStale closes tunnels whose host now routes elsewhere (or whose
+// upstream was replaced), so a site switched to another VPN or exit
+// country stops seeing the old address as soon as it reconnects.
+func (r *router) closeStale() {
+	r.tunMu.Lock()
+	open := make([]*liveTunnel, 0, len(r.tunnels))
+	for t := range r.tunnels {
+		open = append(open, t)
+	}
+	r.tunMu.Unlock()
+	for _, t := range open {
+		id, routed := r.routeFor(t.host)
+		if !routed {
+			id = "direct"
+		}
+		stale := id != t.id
+		if !stale && id != "direct" {
+			r.mu.RLock()
+			cur, ok := r.upstreams[id]
+			r.mu.RUnlock()
+			stale = !ok || cur != t.u
+		}
+		if stale {
+			_ = t.client.Close()
+			_ = t.remote.Close()
+		}
+	}
 }
 
 // upstreamFor waits (up to the context) for a routed upstream to be
@@ -214,6 +268,15 @@ func (r *router) tunnel(c net.Conn, br *bufio.Reader, req *http.Request) {
 		return
 	}
 	defer remote.Close()
+	live := &liveTunnel{host: target, id: id, u: u, client: c, remote: remote}
+	r.tunMu.Lock()
+	r.tunnels[live] = struct{}{}
+	r.tunMu.Unlock()
+	defer func() {
+		r.tunMu.Lock()
+		delete(r.tunnels, live)
+		r.tunMu.Unlock()
+	}()
 	if _, err := io.WriteString(c, "HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
 		return
 	}

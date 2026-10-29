@@ -10,7 +10,12 @@ WebDroid's per-site VPN, in Go, bound to Kotlin with gomobile.
   wg-quick `.conf`. No system VPN, no root.
 - `upstream.go`: SOCKS5 (Tor, Orbot…) and HTTP CONNECT proxies, with host
   names passed through so DNS resolves on the far side.
+- `tor.go`: per-app Tor exit countries. Tor's ExitNodes is global, so while an
+  app asks for a country WebDroid becomes Tor's stream controller
+  (`__LeaveStreamsUnattached`): each stream, tagged by its SOCKS username,
+  is attached to a circuit built through an exit in its app's country.
 
 `go test ./...` runs a WireGuard tunnel between two in-process peers, a SOCKS5
-upstream and the fail-closed behaviour. `./build.sh` produces
+upstream, the fail-closed behaviour and the Tor steering against a fake
+control port. `./build.sh` produces
 `app/libs/vpncore.aar` (CI does this before the Gradle build).

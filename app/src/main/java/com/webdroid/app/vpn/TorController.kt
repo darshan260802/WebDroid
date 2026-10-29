@@ -26,6 +26,10 @@ import java.io.File
  * first time a web app routed through Tor opens and then stays up for the
  * life of the process (tor can only run once per process); when no app
  * needs it any more its network is simply switched off.
+ *
+ * Exit countries are chosen per app by the VPN core, which steers each
+ * app's streams through Tor's control socket (see tools/vpncore/tor.go), so
+ * tor itself runs without ExitNodes.
  */
 object TorController {
     enum class Phase { OFF, STARTING, ON, ERROR }
@@ -92,7 +96,7 @@ object TorController {
         _status.value = Status(Phase.STARTING, summary = "Starting Tor")
         // torrc and the GeoIP copy (several MB) are written off the main thread.
         scope.launch {
-            writeTorrc(app, VpnProfiles.get(app).tor.value)
+            writeTorrc(app)
             android.os.Handler(android.os.Looper.getMainLooper()).post { bind(app) }
         }
     }
@@ -124,25 +128,23 @@ object TorController {
         }
     }
 
-    /** Applies a new exit country to the running tor and to the next start. */
-    fun applySettings(context: Context, settings: TorSettings) {
-        writeTorrc(context.applicationContext, settings)
-        val control = service?.torControlConnection ?: return
-        scope.launch {
-            runCatching {
-                if (settings.exitCountry.isNotEmpty() && geoIpAvailable) {
-                    control.setConf("ExitNodes", "{${settings.exitCountry}}")
-                    control.setConf("StrictNodes", "1")
-                } else {
-                    control.resetConf(listOf("ExitNodes", "StrictNodes"))
-                }
-                // Fresh circuits so the new country applies right away.
-                control.signal("NEWNYM")
-            }
-        }
+    /** The default exit country changed: apps that follow it move over. */
+    fun applySettings(context: Context, @Suppress("UNUSED_PARAMETER") settings: TorSettings) {
+        VpnManager.torDefaultChanged(context)
     }
 
-    private fun writeTorrc(context: Context, settings: TorSettings) {
+    /**
+     * Tor's control socket and the IPv4 GeoIP file, for the VPN core to steer
+     * exit countries; null until Tor runs.
+     */
+    fun controlPaths(context: Context): Pair<String, String>? {
+        if (!bound) return null
+        val socket = File(context.getDir("TorService", Context.MODE_PRIVATE), "data/ControlSocket")
+        val geoIp = File(context.filesDir, "tor-geoip/geoip")
+        return socket.absolutePath to (if (geoIpAvailable) geoIp.absolutePath else "")
+    }
+
+    private fun writeTorrc(context: Context) {
         val geoip = installGeoIp(context)
         val lines = buildList {
             add("ClientOnly 1")
@@ -151,10 +153,6 @@ object TorController {
             if (geoip != null) {
                 add("GeoIPFile ${geoip.first.absolutePath}")
                 add("GeoIPv6File ${geoip.second.absolutePath}")
-                if (settings.exitCountry.isNotEmpty()) {
-                    add("ExitNodes {${settings.exitCountry}}")
-                    add("StrictNodes 1")
-                }
             }
         }
         runCatching { TorService.getTorrc(context).writeText(lines.joinToString("\n", postfix = "\n")) }

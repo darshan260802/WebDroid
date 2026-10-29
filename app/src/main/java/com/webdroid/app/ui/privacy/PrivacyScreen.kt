@@ -377,7 +377,10 @@ private fun TorScreen(check: CheckState?, onCheck: () -> Unit, onBack: () -> Uni
         }
         item(key = "countries") {
             SectionGap()
-            ListSection(header = "Exit Country", footer = "Sites see you as visiting from this country. Fewer relays in a country can make Tor slower.") {
+            ListSection(
+                header = "Default Exit Country",
+                footer = "Tor apps leave the Tor network in this country unless you pick another in an app’s settings, so different apps can appear in different countries. Countries with few relays are slower.",
+            ) {
                 VpnProfiles.TOR_COUNTRIES.forEach { (code, label) ->
                     row(16.dp) {
                         ChoiceRow(

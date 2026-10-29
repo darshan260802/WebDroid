@@ -154,6 +154,8 @@ func (p *proxyUpstream) dialConnect(ctx context.Context, addr string) (net.Conn,
 
 func (p *proxyUpstream) Close() {}
 
+func (p *proxyUpstream) spec() string { return p.kind + "|" + p.user + "|" + p.pass + "|" + p.addr }
+
 func (p *proxyUpstream) Status() map[string]any {
 	p.mu.Lock()
 	defer p.mu.Unlock()

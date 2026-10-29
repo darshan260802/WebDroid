@@ -5,6 +5,7 @@ import android.util.AtomicFile
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import com.webdroid.app.data.WebAppSettings
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.io.File
@@ -110,15 +111,41 @@ class VpnProfiles private constructor(context: Context) {
         save(_state.value.copy(tor = settings))
     }
 
-    /** Display name for an app's VPN choice. */
+    /** Display name for a VPN choice (Tor with its default exit country). */
     fun label(id: String?): String? = when (id) {
         null -> null
         TOR_ID -> "Tor" + (_tor.value.exitCountry.takeIf { it.isNotEmpty() }?.let { " · ${it.uppercase()}" } ?: "")
         else -> get(id)?.name
     }
 
+    /** Display name for an app's VPN, with its own Tor exit country. */
+    fun labelFor(settings: WebAppSettings): String? = when (settings.vpn) {
+        null -> null
+        TOR_ID -> "Tor" + (torExitFor(settings).takeIf { it.isNotEmpty() }?.let { " · ${it.uppercase()}" } ?: "")
+        else -> get(settings.vpn)?.name
+    }
+
+    /** Where an app's Tor traffic leaves: a country code, or "" for anywhere. */
+    fun torExitFor(settings: WebAppSettings): String = when (settings.torCountry) {
+        "" -> _tor.value.exitCountry
+        ANY_COUNTRY -> ""
+        else -> settings.torCountry
+    }
+
     companion object {
         const val TOR_ID = "tor"
+
+        /** An app's Tor country when it lets Tor pick any exit. */
+        const val ANY_COUNTRY = "any"
+
+        /** Router upstream for Tor leaving in [country] ("" for anywhere). */
+        fun torUpstream(country: String): String = if (country.isEmpty()) TOR_ID else "$TOR_ID:$country"
+
+        fun isTor(upstream: String): Boolean = upstream == TOR_ID || upstream.startsWith("$TOR_ID:")
+
+        fun countryName(code: String): String =
+            TOR_COUNTRIES.firstOrNull { it.first == code }?.second
+                ?: java.util.Locale("", code.uppercase()).displayCountry.ifBlank { code.uppercase() }
 
         /** Exit countries offered for Tor (relay-rich ones first). */
         val TOR_COUNTRIES = listOf(

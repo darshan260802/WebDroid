@@ -277,3 +277,78 @@ func TestParseWireGuardErrors(t *testing.T) {
 		t.Fatalf("proxy parse: %+v %v", p, err)
 	}
 }
+
+// A tunnel stays open while its route is unchanged (re-applying the same
+// upstream included) and closes once its host is routed elsewhere.
+func TestTunnelsCloseWhenTheirRouteChanges(t *testing.T) {
+	echo, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer echo.Close()
+	go func() {
+		for {
+			c, err := echo.Accept()
+			if err != nil {
+				return
+			}
+			go func() { defer c.Close(); io.Copy(c, c) }()
+		}
+	}()
+	seen := make(chan string, 16)
+	addr, stop := socksServer(t, echo.Addr().String(), seen)
+	defer stop()
+
+	port, err := Start()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer Stop()
+	if err := SetUpstream("a", "socks5", addr); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetUpstream("b", "socks5", "other:x@"+addr); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetRules(`{"tunnel.test":"a"}`); err != nil {
+		t.Fatal(err)
+	}
+	c, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	fmt.Fprint(c, "CONNECT tunnel.test:80 HTTP/1.1\r\nHost: tunnel.test:80\r\n\r\n")
+	br := bufio.NewReader(c)
+	status, _ := br.ReadString('\n')
+	if !strings.Contains(status, "200") {
+		t.Fatalf("CONNECT answered %q", status)
+	}
+	br.ReadString('\n') // blank line
+	ping := func() error {
+		c.SetDeadline(time.Now().Add(2 * time.Second))
+		if _, err := fmt.Fprint(c, "ping\n"); err != nil {
+			return err
+		}
+		line, err := br.ReadString('\n')
+		if err == nil && line != "ping\n" {
+			err = fmt.Errorf("echo %q", line)
+		}
+		return err
+	}
+	if err := ping(); err != nil {
+		t.Fatal(err)
+	}
+	// Same upstream again, same rules: still open.
+	SetUpstream("a", "socks5", addr)
+	SetRules(`{"tunnel.test":"a","other.test":"b"}`)
+	if err := ping(); err != nil {
+		t.Fatalf("tunnel closed although its route didn't change: %v", err)
+	}
+	// Routed to another upstream: closed.
+	SetRules(`{"tunnel.test":"b"}`)
+	c.SetDeadline(time.Now().Add(2 * time.Second))
+	if _, err := io.ReadAll(br); err != nil && !strings.Contains(err.Error(), "closed") && !strings.Contains(err.Error(), "reset") {
+		t.Fatalf("tunnel not closed after its route changed: %v", err)
+	}
+}
