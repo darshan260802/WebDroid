@@ -65,6 +65,7 @@ import androidx.compose.ui.composed
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -127,6 +128,9 @@ fun BoxScope.GlassTabBar(
         if (!dragging) position.animateTo(selected.toFloat(), Motion.spring(0.35f, 0.82f))
     }
     val stretchAnimated by animateFloatAsState(stretch, Motion.snappy(), label = "tab-stretch")
+    // While a finger slides across the bar, the selection lifts like a lens
+    // and magnifies the tab beneath it.
+    val lens by animateFloatAsState(if (dragging) 1f else 0f, Motion.spring(0.3f, 0.8f), label = "tab-lens")
 
     Glass(
         backdrop = backdrop,
@@ -188,13 +192,22 @@ fun BoxScope.GlassTabBar(
                 .width(itemWidth)
                 .graphicsLayer {
                     translationX = position.value * itemPx
-                    scaleX = 1f + 0.18f * stretchAnimated
-                    scaleY = 1f - 0.06f * stretchAnimated
+                    scaleX = (1f + 0.18f * stretchAnimated) * (1f + 0.1f * lens)
+                    scaleY = (1f - 0.06f * stretchAnimated) * (1f + 0.1f * lens)
                 }
                 .drawBehind {
+                    val corner = CornerRadius(size.height / 2)
                     drawRoundRect(
-                        if (AppColors.isDark) Color.White.copy(alpha = 0.14f) else Color.Black.copy(alpha = 0.07f),
-                        cornerRadius = CornerRadius(size.height / 2),
+                        if (AppColors.isDark) Color.White.copy(alpha = 0.14f + 0.06f * lens) else Color.Black.copy(alpha = 0.07f + 0.03f * lens),
+                        cornerRadius = corner,
+                    )
+                    // Its own rim of light, like a drop of glass on the bar.
+                    drawRoundRect(
+                        Brush.verticalGradient(
+                            listOf(Color.White.copy(alpha = if (AppColors.isDark) 0.28f else 0.7f), Color.White.copy(alpha = 0.06f)),
+                        ),
+                        cornerRadius = corner,
+                        style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1.dp.toPx()),
                     )
                 }
         )
@@ -207,6 +220,12 @@ fun BoxScope.GlassTabBar(
                     Modifier
                         .width(itemWidth)
                         .fillMaxHeight()
+                        .graphicsLayer {
+                            val near = (1f - abs(position.value - index)).coerceIn(0f, 1f)
+                            val s = 1f + 0.16f * near * lens
+                            scaleX = s
+                            scaleY = s
+                        }
                         .pressScale(press, 0.9f)
                         .trackPress(press)
                         .semantics {

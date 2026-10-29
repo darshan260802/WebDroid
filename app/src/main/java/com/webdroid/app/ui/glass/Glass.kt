@@ -247,6 +247,7 @@ private fun DrawScope.drawGlassSurface(live: Boolean, radius: Float, style: Glas
         else -> AppColors.GlassTint
     }
     drawRoundRect(fill, cornerRadius = corner)
+    if (live && GlassEffects.lens) return // the lens shader lights the rim itself
     // Light catching the edge: bright on top, fading down.
     val rim = AppColors.GlassRim
     drawRoundRect(
@@ -384,10 +385,23 @@ internal object GlassEffects {
         return built
     }
 
+    /** Frosted blur (Android 12): the blur does all the work. */
     private fun blurRadius(style: GlassStyle, density: Float): Float = density * when (style) {
         GlassStyle.Regular -> 14f
         GlassStyle.Clear -> 5f
         GlassStyle.Thick -> 24f
+        GlassStyle.Edge -> 10f
+    }
+
+    /**
+     * Liquid Glass (Android 13+) blurs only lightly: the lens is what reads
+     * as glass, and content beneath stays recognisable through it. Menus and
+     * alerts blur more so their text stays legible.
+     */
+    private fun lensBlur(style: GlassStyle, density: Float): Float = density * when (style) {
+        GlassStyle.Regular -> 4f
+        GlassStyle.Clear -> 1.5f
+        GlassStyle.Thick -> 10f
         GlassStyle.Edge -> 10f
     }
 
@@ -408,34 +422,45 @@ internal object GlassEffects {
             style: GlassStyle, dark: Boolean, density: Float,
         ): androidx.compose.ui.graphics.RenderEffect = synchronized(this) {
             val short = min(glass.width, glass.height)
-            val band = min(density * if (style == GlassStyle.Thick) 14f else 20f, short / 2f)
-            val bend = density * when (style) {
-                GlassStyle.Regular -> 12f
-                GlassStyle.Clear -> 16f
-                GlassStyle.Thick -> 8f
-                GlassStyle.Edge -> 0f
+            // The curved rim: wide enough that a button is a drop of glass and
+            // a bar has a thick, rounded edge; strongest on bars and buttons.
+            val (bandDp, bendDp, zoom) = when (style) {
+                GlassStyle.Regular -> Triple(24f, 24f, 0.06f)
+                GlassStyle.Clear -> Triple(20f, 20f, 0.05f)
+                GlassStyle.Thick -> Triple(16f, 14f, 0.025f)
+                GlassStyle.Edge -> Triple(0f, 0f, 0f)
             }
+            val band = min(density * bandDp, short / 2f)
+            val bend = min(density * bendDp, short * 0.45f)
             shader.setFloatUniform("layerSize", w.toFloat(), h.toFloat())
             shader.setFloatUniform("origin", margin, margin)
             shader.setFloatUniform("size", glass.width, glass.height)
             shader.setFloatUniform("radius", radius)
             shader.setFloatUniform("band", band)
             shader.setFloatUniform("bend", bend)
-            shader.setFloatUniform("dispersion", if (style == GlassStyle.Thick) 0.08f else 0.18f)
-            shader.setFloatUniform("saturation", if (style == GlassStyle.Clear) 1.25f else 1.5f)
-            shader.setFloatUniform("rim", if (dark) 0.22f else 0.38f)
+            shader.setFloatUniform("zoom", zoom)
+            shader.setFloatUniform("dispersion", if (style == GlassStyle.Thick) 0.12f else 0.28f)
+            shader.setFloatUniform("saturation", if (style == GlassStyle.Clear) 1.25f else 1.4f)
+            shader.setFloatUniform("rim", if (dark) 0.8f else 0.6f)
+            shader.setFloatUniform("rimWidth", 1.5f * density)
+            shader.setFloatUniform("glow", 0.45f)
+            shader.setFloatUniform("shade", if (dark) 0.3f else 0.14f)
+            shader.setFloatUniform("light", -0.6f, -0.8f)
             val lensEffect = RenderEffect.createRuntimeShaderEffect(shader, "content")
-            val r = blurRadius(style, density)
+            val r = lensBlur(style, density)
             val blur = RenderEffect.createBlurEffect(r, r, Shader.TileMode.CLAMP)
-            // Blur first, then refract the blurred content.
+            // Blur lightly first, then refract.
             RenderEffect.createChainEffect(lensEffect, blur).asComposeRenderEffect()
         }
     }
 
     /**
-     * Rounded-rect lens: content near the rim is sampled from just outside the
-     * shape (light bending around the edge), with slight chromatic dispersion,
-     * a saturation boost (vibrancy) and a specular rim lit from the top left.
+     * A slab of glass with a rounded, curved rim. Through the flat middle the
+     * content is slightly magnified; across the rim it bends steeply, pulling
+     * in what lies just outside the shape, with a little chromatic dispersion.
+     * Light from the top left catches the rim as a thin highlight (and its
+     * reflection on the opposite side) and glows softly inside the lit edge,
+     * while the far edge falls into shade, giving the glass its thickness.
      */
     private const val LENS_SHADER = """
 uniform shader content;
@@ -445,9 +470,14 @@ uniform float2 size;
 uniform float radius;
 uniform float band;
 uniform float bend;
+uniform float zoom;
 uniform float dispersion;
 uniform float saturation;
 uniform float rim;
+uniform float rimWidth;
+uniform float glow;
+uniform float shade;
+uniform float2 light;
 
 float sdRoundRect(float2 p, float2 b, float r) {
     float2 q = abs(p) - b + float2(r);
@@ -460,7 +490,8 @@ half4 sampleAt(float2 c) {
 
 half4 main(float2 coord) {
     float2 hs = size * 0.5;
-    float2 p = coord - origin - hs;
+    float2 center = origin + hs;
+    float2 p = coord - center;
     float r = min(radius, min(hs.x, hs.y));
     float d = sdRoundRect(p, hs, r);
     if (d > 1.0) {
@@ -473,26 +504,32 @@ half4 main(float2 coord) {
     float nl = length(n);
     n = nl > 0.0001 ? n / nl : float2(0.0);
 
-    float inside = clamp(-d / max(band, 1.0), 0.0, 1.0);
-    float t = 1.0 - inside;
+    // 0 in the flat middle, 1 at the very edge; the rim's height falls off
+    // like a quarter circle, so the bending grows steeply towards the edge.
+    float t = 1.0 - clamp(-d / max(band, 1.0), 0.0, 1.0);
     float profile = 1.0 - sqrt(max(1.0 - t * t, 0.0));
+    float2 base = center + p * (1.0 - zoom);
     float2 offset = n * bend * profile;
 
-    half4 col = sampleAt(coord + offset);
+    half4 col = sampleAt(base + offset);
     if (dispersion > 0.0) {
         float k = dispersion * profile;
-        col.r = sampleAt(coord + offset * (1.0 + k)).r;
-        col.b = sampleAt(coord + offset * (1.0 - k)).b;
+        col.r = sampleAt(base + offset * (1.0 + k)).r;
+        col.b = sampleAt(base + offset * (1.0 - k)).b;
     }
 
     half lum = dot(col.rgb, half3(0.2126, 0.7152, 0.0722));
     col.rgb = clamp(mix(half3(lum), col.rgb, half(saturation)), half3(0.0), half3(1.0));
 
-    float light = clamp(dot(n, normalize(float2(-0.55, -0.85))), 0.0, 1.0);
-    float edge = 1.0 - smoothstep(0.0, 2.0, -d);
-    float glow = t * t * t;
-    float spec = rim * (edge * (0.35 + 0.65 * light) + glow * light * 0.35);
-    col.rgb = clamp(col.rgb + half3(spec) * col.a, half3(0.0), half3(1.0));
+    float2 l = normalize(light);
+    float facing = dot(n, l);
+    float edge = d > 0.5 ? 0.0 : 1.0 - clamp(-d / max(rimWidth, 0.5), 0.0, 1.0);
+    float spec = edge * (0.2 + 0.8 * facing * facing);
+    float t2 = t * t;
+    float lit = t2 * t2 * max(facing, 0.0);
+    float dim = t2 * t * max(-facing, 0.0);
+    col.rgb = col.rgb * half(1.0 - shade * dim) + half3(rim * (spec + glow * lit)) * col.a;
+    col.rgb = clamp(col.rgb, half3(0.0), half3(col.a));
 
     float aa = clamp(0.5 - d, 0.0, 1.0);
     return col * half(aa);
