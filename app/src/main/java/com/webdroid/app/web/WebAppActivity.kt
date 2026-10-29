@@ -49,6 +49,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Color as ComposeColor
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.core.content.ContextCompat
@@ -84,6 +85,7 @@ import com.webdroid.app.vpn.TorController
 import com.webdroid.app.vpn.VpnManager
 import com.webdroid.app.vpn.VpnProfiles
 import com.webdroid.app.ui.components.Haptics
+import com.webdroid.app.ui.theme.TileColor
 import com.webdroid.app.ui.theme.WebDroidTheme
 import com.webdroid.app.util.Net
 import com.webdroid.app.util.UrlUtils
@@ -511,7 +513,7 @@ class WebAppActivity : FragmentActivity(), WebAppActions {
     private fun updateTaskDescription() {
         val current = app ?: return
         val tile = IconStore.get(this).renderTile(current, 192)
-        val color = CardColorArgb.of(current.cardColor)
+        val color = TileColor.of(current.cardColor).solid.toArgb()
         @Suppress("DEPRECATION")
         setTaskDescription(ActivityManager.TaskDescription(current.name, tile, color))
     }
@@ -1825,18 +1827,6 @@ class WebAppActivity : FragmentActivity(), WebAppActions {
             delay(1500)
             unlocking = false
         }
-    }
-}
-
-/** Card colours as ARGB ints for platform APIs. */
-private object CardColorArgb {
-    fun of(index: Int): Int = when (Math.floorMod(index, 6)) {
-        0 -> 0xFFFF4D8B.toInt()
-        1 -> 0xFF1A3A3A.toInt()
-        2 -> 0xFFB8A4ED.toInt()
-        3 -> 0xFFFFB084.toInt()
-        4 -> 0xFFE8B94A.toInt()
-        else -> 0xFFF5F0E0.toInt()
     }
 }
 

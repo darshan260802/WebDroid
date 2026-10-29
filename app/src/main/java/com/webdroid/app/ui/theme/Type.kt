@@ -1,36 +1,42 @@
 package com.webdroid.app.ui.theme
 
+import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.em
+import androidx.compose.ui.text.style.LineHeightStyle
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.sp
-import com.webdroid.app.R
-
-val Inter = FontFamily(
-    Font(R.font.inter_regular, FontWeight.Normal),
-    Font(R.font.inter_medium, FontWeight.Medium),
-    Font(R.font.inter_semibold, FontWeight.SemiBold),
-    Font(R.font.inter_bold, FontWeight.Bold),
-)
 
 /**
- * Clay type scale. Display styles stand in for "Plain Black": Inter 500 with
- * tight negative tracking, never bolder than 500. Sizes are the mobile steps
- * of the scale.
+ * Apple's text styles at the default (Large) Dynamic Type size, set in the
+ * phone's own system font. Sizes are in sp, so they follow the system font
+ * size; tracking is size-specific (tighter as type grows, near zero for body).
  */
-object ClayType {
-    val DisplayLg = TextStyle(fontFamily = Inter, fontWeight = FontWeight.Medium, fontSize = 40.sp, lineHeight = 42.sp, letterSpacing = (-0.045).em)
-    val DisplayMd = TextStyle(fontFamily = Inter, fontWeight = FontWeight.Medium, fontSize = 32.sp, lineHeight = 36.sp, letterSpacing = (-0.035).em)
-    val DisplaySm = TextStyle(fontFamily = Inter, fontWeight = FontWeight.Medium, fontSize = 26.sp, lineHeight = 30.sp, letterSpacing = (-0.025).em)
-    val TitleLg = TextStyle(fontFamily = Inter, fontWeight = FontWeight.SemiBold, fontSize = 22.sp, lineHeight = 28.sp, letterSpacing = (-0.3).sp)
-    val TitleMd = TextStyle(fontFamily = Inter, fontWeight = FontWeight.SemiBold, fontSize = 18.sp, lineHeight = 25.sp)
-    val TitleSm = TextStyle(fontFamily = Inter, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, lineHeight = 22.sp)
-    val BodyMd = TextStyle(fontFamily = Inter, fontWeight = FontWeight.Normal, fontSize = 16.sp, lineHeight = 24.sp)
-    val BodySm = TextStyle(fontFamily = Inter, fontWeight = FontWeight.Normal, fontSize = 14.sp, lineHeight = 21.sp)
-    val Caption = TextStyle(fontFamily = Inter, fontWeight = FontWeight.Medium, fontSize = 13.sp, lineHeight = 18.sp)
-    val CaptionUpper = TextStyle(fontFamily = Inter, fontWeight = FontWeight.SemiBold, fontSize = 12.sp, lineHeight = 17.sp, letterSpacing = 1.5.sp)
-    val Button = TextStyle(fontFamily = Inter, fontWeight = FontWeight.SemiBold, fontSize = 15.sp, lineHeight = 15.sp)
-    val NavLink = TextStyle(fontFamily = Inter, fontWeight = FontWeight.Medium, fontSize = 14.sp, lineHeight = 20.sp)
+object AppType {
+    private fun style(size: Int, leading: Int, weight: FontWeight, tracking: TextUnit) = TextStyle(
+        fontFamily = FontFamily.Default,
+        fontWeight = weight,
+        fontSize = size.sp,
+        lineHeight = leading.sp,
+        letterSpacing = tracking,
+        platformStyle = PlatformTextStyle(includeFontPadding = false),
+        lineHeightStyle = LineHeightStyle(LineHeightStyle.Alignment.Center, LineHeightStyle.Trim.None),
+    )
+
+    val LargeTitle = style(34, 41, FontWeight.Bold, (-0.6).sp)
+    val Title1 = style(28, 34, FontWeight.Bold, (-0.45).sp)
+    val Title2 = style(22, 28, FontWeight.Bold, (-0.3).sp)
+    val Title3 = style(20, 25, FontWeight.SemiBold, (-0.2).sp)
+    val Headline = style(17, 22, FontWeight.SemiBold, (-0.2).sp)
+    val Body = style(17, 22, FontWeight.Normal, (-0.2).sp)
+    val Callout = style(16, 21, FontWeight.Normal, (-0.15).sp)
+    val Subhead = style(15, 20, FontWeight.Normal, (-0.1).sp)
+    val Footnote = style(13, 18, FontWeight.Normal, 0.sp)
+    val Caption1 = style(12, 16, FontWeight.Normal, 0.05.sp)
+    val Caption2 = style(11, 13, FontWeight.Medium, 0.1.sp)
+
+    /** Button labels: Body weight bumped for presence without extra size. */
+    val Button = Headline
+    val SectionHeader = style(13, 18, FontWeight.Medium, 0.1.sp)
 }

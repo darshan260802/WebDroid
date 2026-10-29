@@ -13,25 +13,36 @@ import androidx.activity.SystemBarStyle
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.ExperimentalSharedTransitionApi
-import androidx.compose.animation.SharedTransitionLayout
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
-import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.GridView
+import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.Shield
+import androidx.compose.material.icons.rounded.GridView
+import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material.icons.rounded.Shield
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.webkit.ProfileStore
@@ -44,19 +55,34 @@ import com.webdroid.app.data.IconStore
 import com.webdroid.app.data.ThemeMode
 import com.webdroid.app.data.WebApp
 import com.webdroid.app.data.WebAppRepository
+import com.webdroid.app.ui.apps.AppsCallbacks
+import com.webdroid.app.ui.apps.AppsScreen
+import com.webdroid.app.ui.components.GlassTabBar
+import com.webdroid.app.ui.components.LocalChromeBackdrop
+import com.webdroid.app.ui.components.LocalOverlayHost
+import com.webdroid.app.ui.components.LocalSheetPresentation
+import com.webdroid.app.ui.components.OverlayHost
+import com.webdroid.app.ui.components.OverlayLayer
+import com.webdroid.app.ui.components.SheetPresentation
+import com.webdroid.app.ui.components.TabItem
+import com.webdroid.app.ui.editor.EditorRequest
 import com.webdroid.app.ui.editor.EditorResult
-import com.webdroid.app.ui.editor.EditorScreen
-import com.webdroid.app.ui.home.HomeCallbacks
-import com.webdroid.app.ui.home.HomeScreen
+import com.webdroid.app.ui.editor.EditorSheet
+import com.webdroid.app.ui.glass.glassSource
+import com.webdroid.app.ui.glass.rememberGlassBackdrop
+import com.webdroid.app.ui.privacy.PrivacyRoute
+import com.webdroid.app.ui.privacy.PrivacyScreen
+import com.webdroid.app.ui.settings.SettingsRoute
 import com.webdroid.app.ui.settings.SettingsScreen
-import com.webdroid.app.ui.theme.Clay
-import com.webdroid.app.ui.theme.ClayPalette
-import com.webdroid.app.ui.theme.ClayTheme
+import com.webdroid.app.ui.theme.AppColors
+import com.webdroid.app.ui.theme.AppTheme
+import com.webdroid.app.ui.theme.ColorPalette
+import com.webdroid.app.ui.theme.Motion
+import com.webdroid.app.ui.theme.WebDroidTheme
 import com.webdroid.app.ui.update.UpdateActions
 import com.webdroid.app.ui.update.info
 import com.webdroid.app.update.AppUpdater
 import com.webdroid.app.update.UpdateState
-import com.webdroid.app.ui.theme.WebDroidTheme
 import com.webdroid.app.web.AppLock
 import com.webdroid.app.web.ShortcutHelper
 import com.webdroid.app.web.WebAppActivity
@@ -64,11 +90,15 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-sealed interface Screen {
-    data object Home : Screen
-    data class Editor(val appId: String?, val prefillUrl: String? = null) : Screen
-    data object Settings : Screen
-}
+private const val TAB_APPS = 0
+private const val TAB_PRIVACY = 1
+private const val TAB_SETTINGS = 2
+
+private val Tabs = listOf(
+    TabItem("Apps", Icons.Outlined.GridView, Icons.Rounded.GridView),
+    TabItem("Privacy", Icons.Outlined.Shield, Icons.Rounded.Shield),
+    TabItem("Settings", Icons.Outlined.Settings, Icons.Rounded.Settings),
+)
 
 class MainActivity : ComponentActivity() {
     companion object {
@@ -77,11 +107,15 @@ class MainActivity : ComponentActivity() {
 
     private val repo by lazy { WebAppRepository.get(this) }
     private val icons by lazy { IconStore.get(this) }
-    private var screen by mutableStateOf<Screen>(Screen.Home)
+
+    private var tab by mutableIntStateOf(TAB_APPS)
+    private val privacyStack = mutableStateListOf<PrivacyRoute>(PrivacyRoute.Root)
+    private val settingsStack = mutableStateListOf<SettingsRoute>(SettingsRoute.Root)
+    private var editor by mutableStateOf<EditorRequest?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        ClayTheme.prime(this)
-        applyWindowTheme(Clay.isDark)
+        AppTheme.prime(this)
+        applyWindowTheme(AppColors.isDark)
         super.onCreate(savedInstanceState)
         AppUpdater.restore(this)
         handleIntent(intent)
@@ -93,7 +127,7 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             WebDroidTheme {
-                val dark = Clay.isDark
+                val dark = AppColors.isDark
                 LaunchedEffect(dark) { applyWindowTheme(dark) }
                 val update by AppUpdater.state.collectAsStateWithLifecycle()
                 val snoozeTick by AppUpdater.snoozeTick.collectAsStateWithLifecycle()
@@ -107,11 +141,12 @@ class MainActivity : ComponentActivity() {
                         download = { AppUpdater.download(this@MainActivity) },
                         checkNow = { AppUpdater.checkNow(this@MainActivity) },
                         later = { AppUpdater.snooze(this@MainActivity) },
+                        showNotes = { showReleaseNotes() },
                     )
                 }
                 val apps by repo.apps.collectAsStateWithLifecycle()
                 val status by AdblockEngine.status.collectAsStateWithLifecycle()
-                val settingsState by AppSettings.get(this).state.collectAsStateWithLifecycle()
+                val settings by AppSettings.get(this).state.collectAsStateWithLifecycle()
                 val iconCache = remember { mutableStateMapOf<String, Bitmap?>() }
                 LaunchedEffect(apps) {
                     val wanted = apps.associate { it.id to it.iconFile }
@@ -120,93 +155,120 @@ class MainActivity : ComponentActivity() {
                             val key = "$id:$file"
                             if (iconCache[key] == null && file != null) {
                                 val bitmap = icons.load(file)
-                                withContext(Dispatchers.Main) {
-                                    iconCache[key] = bitmap
-                                }
+                                withContext(Dispatchers.Main) { iconCache[key] = bitmap }
                             }
                         }
                     }
                 }
                 val iconsById = apps.associate { it.id to iconCache["${it.id}:${it.iconFile}"] }
 
-                BackHandler(enabled = screen != Screen.Home) { screen = Screen.Home }
+                val chrome = rememberGlassBackdrop()
+                val overlays = remember { OverlayHost() }
+                val presentation = remember { SheetPresentation() }
+                val tabStates = rememberSaveableStateHolder()
+                val topInset = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
 
-                SharedTransitionLayout {
-                    AnimatedContent(
-                        targetState = screen,
-                        transitionSpec = {
-                            when {
-                                targetState is Screen.Settings ->
-                                    (slideInHorizontally(tween(340)) { it / 3 } + fadeIn(tween(240))) togetherWith
-                                        (slideOutHorizontally(tween(340)) { -it / 6 } + fadeOut(tween(200)))
-                                initialState is Screen.Settings ->
-                                    (slideInHorizontally(tween(340)) { -it / 6 } + fadeIn(tween(240))) togetherWith
-                                        (slideOutHorizontally(tween(340)) { it / 3 } + fadeOut(tween(200)))
-                                else -> (fadeIn(tween(260, delayMillis = 60)) + scaleIn(tween(320), initialScale = 0.97f)) togetherWith
-                                    (fadeOut(tween(180)) + scaleOut(tween(320), targetScale = 1.02f))
+                // Back from another tab's first screen returns to Apps.
+                BackHandler(enabled = tab != TAB_APPS) { tab = TAB_APPS }
+
+                CompositionLocalProvider(
+                    LocalOverlayHost provides overlays,
+                    LocalChromeBackdrop provides chrome,
+                    LocalSheetPresentation provides presentation,
+                ) {
+                    Box(Modifier.fillMaxSize().background(Color.Black)) {
+                        // The app recedes behind a large sheet, like a card pushed back.
+                        Box(
+                            Modifier
+                                .fillMaxSize()
+                                .graphicsLayer {
+                                    val p = if (Motion.reduced) 0f else presentation.value
+                                    if (p > 0f) {
+                                        val scale = 1f - 0.07f * p
+                                        scaleX = scale
+                                        scaleY = scale
+                                        translationY = topInset.toPx() * 0.6f * p
+                                        shape = RoundedCornerShape((28f * p).dp)
+                                        clip = true
+                                    } else {
+                                        scaleX = 1f
+                                        scaleY = 1f
+                                        translationY = 0f
+                                        clip = false
+                                    }
+                                },
+                        ) {
+                            Box(Modifier.fillMaxSize().glassSource(chrome).background(AppColors.Background)) {
+                                tabStates.SaveableStateProvider(tab) {
+                                    when (tab) {
+                                        TAB_APPS -> AppsScreen(
+                                            apps = apps,
+                                            icons = iconsById,
+                                            update = homeUpdate,
+                                            updateActions = updateActions,
+                                            callbacks = AppsCallbacks(
+                                                onOpen = { app, bounds -> openApp(app, bounds) },
+                                                onAdd = { editor = EditorRequest(null, null, null, repo.nextTileColor()) },
+                                                onAddFrom = { url -> editor = EditorRequest(null, null, url, repo.nextTileColor()) },
+                                                onEdit = { app -> editor = EditorRequest(app, iconsById[app.id], null, app.cardColor) },
+                                                onPin = { app ->
+                                                    if (!ShortcutHelper.pin(this@MainActivity, app)) {
+                                                        android.widget.Toast.makeText(this@MainActivity, "Your launcher doesn’t support shortcuts", android.widget.Toast.LENGTH_SHORT).show()
+                                                    }
+                                                },
+                                                onDelete = { deleteApp(it) },
+                                                onReorder = { ids -> repo.reorder(ids) },
+                                                onToggleTheme = {
+                                                    val nowDark = AppColors.isDark
+                                                    AppSettings.get(this@MainActivity).update {
+                                                        it.copy(themeMode = if (nowDark) ThemeMode.LIGHT else ThemeMode.DARK)
+                                                    }
+                                                },
+                                            ),
+                                        )
+                                        TAB_PRIVACY -> PrivacyScreen(
+                                            stack = privacyStack.toList(),
+                                            onPush = { privacyStack.add(it) },
+                                            onPop = { if (privacyStack.size > 1) privacyStack.removeAt(privacyStack.lastIndex) },
+                                            settings = settings,
+                                            status = status,
+                                            lists = remember { AdblockStorage.catalog(this@MainActivity).lists },
+                                            lastUpdated = getSharedPreferences("webdroid", MODE_PRIVATE).getLong("filters_updated_at", 0L),
+                                            onUpdate = { transform -> AppSettings.get(this@MainActivity).update(transform) },
+                                            onUpdateFilters = { FilterUpdateWorker.updateNow(this@MainActivity) },
+                                        )
+                                        else -> SettingsScreen(
+                                            stack = settingsStack.toList(),
+                                            onPush = { settingsStack.add(it) },
+                                            onPop = { if (settingsStack.size > 1) settingsStack.removeAt(settingsStack.lastIndex) },
+                                            settings = settings,
+                                            onUpdate = { transform -> AppSettings.get(this@MainActivity).update(transform) },
+                                            update = update,
+                                            updateLastChecked = remember(update) { AppUpdater.lastCheckedAt(this@MainActivity) },
+                                            updateActions = updateActions,
+                                        )
+                                    }
+                                }
                             }
-                        },
-                        label = "screens",
-                    ) { target ->
-                        when (target) {
-                            Screen.Home -> HomeScreen(
-                                apps = apps,
-                                icons = iconsById,
-                                adblockStatus = status,
-                                adblockEnabled = settingsState.adBlockEnabled,
-                                update = homeUpdate,
-                                updateActions = updateActions,
-                                callbacks = HomeCallbacks(
-                                    onOpen = { app, bounds -> openApp(app, bounds) },
-                                    onCreate = { screen = Screen.Editor(null) },
-                                    onCreateFrom = { url -> screen = Screen.Editor(null, url) },
-                                    onEdit = { screen = Screen.Editor(it.id) },
-                                    onSettings = { screen = Screen.Settings },
-                                    onToggleTheme = {
-                                        val nowDark = Clay.isDark
-                                        AppSettings.get(this@MainActivity).update {
-                                            it.copy(themeMode = if (nowDark) ThemeMode.LIGHT else ThemeMode.DARK)
-                                        }
-                                    },
-                                    onPin = { app ->
-                                        if (!ShortcutHelper.pin(this@MainActivity, app)) {
-                                            android.widget.Toast.makeText(this@MainActivity, "Your launcher doesn't support shortcuts", android.widget.Toast.LENGTH_SHORT).show()
-                                        }
-                                    },
-                                    onDelete = { deleteApp(it) },
-                                ),
-                                sharedScope = this@SharedTransitionLayout,
-                                animatedScope = this@AnimatedContent,
-                            )
-                            is Screen.Editor -> {
-                                val existing = target.appId?.let { id -> apps.firstOrNull { it.id == id } }
-                                EditorScreen(
-                                    existing = existing,
-                                    prefillUrl = target.prefillUrl,
-                                    existingIcon = existing?.let { iconsById[it.id] },
-                                    defaultCardColor = repo.nextCardColor(),
-                                    isolatedSupported = isolatedSupported,
-                                    lockSupported = lockSupported,
-                                    onSave = { result -> save(existing, result) },
-                                    onCancel = { screen = Screen.Home },
-                                    onDelete = { deleteApp(it) },
-                                    sharedScope = this@SharedTransitionLayout,
-                                    animatedScope = this@AnimatedContent,
-                                )
-                            }
-                            Screen.Settings -> SettingsScreen(
-                                settings = settingsState,
-                                status = status,
-                                lists = remember { AdblockStorage.catalog(this@MainActivity).lists },
-                                lastUpdated = getSharedPreferences("webdroid", MODE_PRIVATE).getLong("filters_updated_at", 0L),
-                                onUpdate = { transform -> AppSettings.get(this@MainActivity).update(transform) },
-                                onUpdateFilters = { FilterUpdateWorker.updateNow(this@MainActivity) },
-                                update = update,
-                                updateLastChecked = remember(update) { AppUpdater.lastCheckedAt(this@MainActivity) },
-                                updateActions = updateActions,
-                                onBack = { screen = Screen.Home },
+                            GlassTabBar(
+                                backdrop = chrome,
+                                items = Tabs,
+                                selected = tab,
+                                onSelect = { tab = it },
+                                onReselect = { popToRoot(it) },
                             )
                         }
+
+                        Box(Modifier.fillMaxSize()) { OverlayLayer(overlays) }
+
+                        EditorSheet(
+                            request = editor,
+                            isolatedSupported = { isolatedSupported },
+                            lockSupported = { lockSupported },
+                            onSave = { existing, result -> save(existing, result) },
+                            onDelete = { deleteApp(it) },
+                            onDismiss = { editor = null },
+                        )
                     }
                 }
             }
@@ -233,23 +295,45 @@ class MainActivity : ComponentActivity() {
         if (intent == null) return
         if (intent.getBooleanExtra(AppUpdater.EXTRA_INSTALL_UPDATE, false)) {
             intent.removeExtra(AppUpdater.EXTRA_INSTALL_UPDATE)
-            screen = Screen.Home
             AppUpdater.install(this)
         }
         val editId = intent.getStringExtra(EXTRA_EDIT_APP) ?: return
-        if (repo.get(editId) != null) screen = Screen.Editor(editId)
         intent.removeExtra(EXTRA_EDIT_APP)
+        val app = repo.get(editId) ?: return
+        tab = TAB_APPS
+        lifecycleScope.launch {
+            val icon = withContext(Dispatchers.IO) { icons.load(app.iconFile) }
+            editor = EditorRequest(app, icon, null, app.cardColor)
+        }
+    }
+
+    private fun popToRoot(index: Int) {
+        when (index) {
+            TAB_PRIVACY -> while (privacyStack.size > 1) privacyStack.removeAt(privacyStack.lastIndex)
+            TAB_SETTINGS -> while (settingsStack.size > 1) settingsStack.removeAt(settingsStack.lastIndex)
+        }
+    }
+
+    private fun showReleaseNotes() {
+        tab = TAB_SETTINGS
+        if (settingsStack.lastOrNull() != SettingsRoute.WhatsNew) {
+            popToRoot(TAB_SETTINGS)
+            settingsStack.add(SettingsRoute.WhatsNew)
+        }
     }
 
     /** System bar icons, window background and next launch's splash follow WebDroid's theme. */
     private fun applyWindowTheme(dark: Boolean) {
-        val canvas = (if (dark) ClayPalette.Dark else ClayPalette.Light).canvas.toArgb()
+        val background = (if (dark) ColorPalette.Dark else ColorPalette.Light).background.toArgb()
         val transparent = android.graphics.Color.TRANSPARENT
         enableEdgeToEdge(
-            statusBarStyle = if (dark) SystemBarStyle.dark(canvas) else SystemBarStyle.light(canvas, canvas),
+            statusBarStyle = if (dark) SystemBarStyle.dark(transparent) else SystemBarStyle.light(transparent, transparent),
             navigationBarStyle = if (dark) SystemBarStyle.dark(transparent) else SystemBarStyle.light(transparent, transparent),
         )
-        window.setBackgroundDrawable(ColorDrawable(canvas))
+        if (Build.VERSION.SDK_INT >= 29) {
+            window.isNavigationBarContrastEnforced = false
+        }
+        window.setBackgroundDrawable(ColorDrawable(background))
         if (Build.VERSION.SDK_INT >= 33) {
             val splash = when (AppSettings.get(this).state.value.themeMode) {
                 ThemeMode.LIGHT -> R.style.Theme_WebDroid_Light
@@ -294,16 +378,17 @@ class MainActivity : ComponentActivity() {
             )
             repo.upsert(updated)
             if (existing != null) ShortcutHelper.refresh(this@MainActivity, updated)
-            screen = Screen.Home
+            editor = null
             if (existing == null) {
-                // Open the new app right away, like installing it.
-                kotlinx.coroutines.delay(380)
+                // Open the new app once the sheet has gone, like installing it.
+                kotlinx.coroutines.delay(420)
                 openApp(updated, null)
             }
         }
     }
 
     private fun deleteApp(app: WebApp) {
+        editor = null
         repo.delete(app.id)
         ShortcutHelper.remove(this, app)
         com.webdroid.app.web.WebNotifier.deleteChannel(this, app)
@@ -316,7 +401,5 @@ class MainActivity : ComponentActivity() {
             runCatching { ProfileStore.getInstance().deleteProfile(app.profileName) }
                 .onFailure { WebDroidApp.queueProfileDeletion(this, app.profileName) }
         }
-        screen = Screen.Home
     }
 }
-

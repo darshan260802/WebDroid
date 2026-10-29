@@ -14,10 +14,12 @@ import android.os.Build
 import android.provider.Settings
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import androidx.compose.ui.graphics.toArgb
 import androidx.core.content.ContextCompat
 import com.webdroid.app.R
 import com.webdroid.app.data.IconStore
 import com.webdroid.app.data.WebApp
+import com.webdroid.app.ui.theme.TileColor
 import com.webdroid.app.util.Net
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -128,7 +130,7 @@ object WebNotifier {
             .setContentTitle(n.title.ifBlank { app.name })
             .setContentText(n.body)
             .setSubText(app.name)
-            .setColor(CardColorInt.of(app.cardColor))
+            .setColor(TileColor.of(app.cardColor).solid.toArgb())
             .setAutoCancel(true)
             .setContentIntent(contentIntent)
             .setGroup("group_${app.id}")
@@ -148,7 +150,7 @@ object WebNotifier {
             val summary = NotificationCompat.Builder(context, channelId(app))
                 .setSmallIcon(R.drawable.ic_stat_webdroid)
                 .setSubText(app.name)
-                .setColor(CardColorInt.of(app.cardColor))
+                .setColor(TileColor.of(app.cardColor).solid.toArgb())
                 .setGroup("group_${app.id}")
                 .setGroupSummary(true)
                 .setAutoCancel(true)
@@ -178,16 +180,4 @@ object WebNotifier {
             BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
         }
     }.getOrNull()
-}
-
-/** Card colours as ARGB ints for platform APIs. */
-object CardColorInt {
-    fun of(index: Int): Int = when (Math.floorMod(index, 6)) {
-        0 -> 0xFFFF4D8B.toInt()
-        1 -> 0xFF1A3A3A.toInt()
-        2 -> 0xFFB8A4ED.toInt()
-        3 -> 0xFFFFB084.toInt()
-        4 -> 0xFFE8B94A.toInt()
-        else -> 0xFFF5F0E0.toInt()
-    }
 }

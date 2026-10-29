@@ -21,6 +21,8 @@ data class GlobalSettings(
     val autoRotate: Boolean = true,
     val defaultFit: FitMode = FitMode.FIT,
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
+    /** Opaque bars and sheets instead of glass. */
+    val reduceTransparency: Boolean = false,
     /** Look for new WebDroid releases on GitHub at launch and once a day. */
     val autoUpdate: Boolean = true,
     /** Also download updates over metered connections. */
@@ -46,6 +48,7 @@ class AppSettings private constructor(context: Context) {
         autoRotate = prefs.getBoolean("auto_rotate", true),
         defaultFit = runCatching { FitMode.valueOf(prefs.getString("fit", null) ?: "FIT") }.getOrDefault(FitMode.FIT),
         themeMode = runCatching { ThemeMode.valueOf(prefs.getString("theme", null) ?: "SYSTEM") }.getOrDefault(ThemeMode.SYSTEM),
+        reduceTransparency = prefs.getBoolean("reduce_transparency", false),
         autoUpdate = prefs.getBoolean("auto_update", true),
         updateOnMobileData = prefs.getBoolean("update_mobile_data", false),
     )
@@ -60,6 +63,7 @@ class AppSettings private constructor(context: Context) {
             putBoolean("auto_rotate", next.autoRotate)
             putString("fit", next.defaultFit.name)
             putString("theme", next.themeMode.name)
+            putBoolean("reduce_transparency", next.reduceTransparency)
             putBoolean("auto_update", next.autoUpdate)
             putBoolean("update_mobile_data", next.updateOnMobileData)
         }

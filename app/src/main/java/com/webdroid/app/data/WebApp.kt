@@ -47,7 +47,7 @@ data class WebApp(
     val iconFile: String? = null,
     /** theme-color advertised by the site (ARGB), used for system bars. */
     val themeColor: Int? = null,
-    /** Index into the Clay card palette. */
+    /** Index into [com.webdroid.app.ui.theme.TileColor]. */
     val cardColor: Int = 0,
     val createdAt: Long = System.currentTimeMillis(),
     val lastOpenedAt: Long = 0L,

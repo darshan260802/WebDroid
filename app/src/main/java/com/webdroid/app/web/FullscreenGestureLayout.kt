@@ -3,6 +3,7 @@ package com.webdroid.app.web
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Color
+import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.util.TypedValue
 import android.view.Gravity
@@ -11,8 +12,6 @@ import android.view.View
 import android.view.ViewConfiguration
 import android.widget.FrameLayout
 import android.widget.TextView
-import androidx.core.content.res.ResourcesCompat
-import com.webdroid.app.R
 import kotlin.math.abs
 
 /**
@@ -47,7 +46,7 @@ class FullscreenGestureLayout(
     private val hint = TextView(context).apply {
         setTextColor(Color.WHITE)
         setTextSize(TypedValue.COMPLEX_UNIT_SP, 17f)
-        typeface = ResourcesCompat.getFont(context, R.font.inter_semibold)
+        typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
         val pad = (14 * resources.displayMetrics.density).toInt()
         setPadding(pad * 3 / 2, pad, pad * 3 / 2, pad)
         background = GradientDrawable().apply {

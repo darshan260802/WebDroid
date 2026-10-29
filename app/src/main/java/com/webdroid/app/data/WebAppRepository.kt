@@ -60,11 +60,6 @@ class WebAppRepository private constructor(context: Context) {
 
     fun get(id: String): WebApp? = _apps.value.firstOrNull { it.id == id }
 
-    fun nextCardColor(): Int {
-        val last = _apps.value.maxByOrNull { it.order }?.cardColor ?: -1
-        return (last + 1).mod(6)
-    }
-
     fun newId(): String = UUID.randomUUID().toString().replace("-", "").take(16)
 
     fun upsert(app: WebApp) {
@@ -87,6 +82,20 @@ class WebAppRepository private constructor(context: Context) {
     }
 
     fun markOpened(id: String) = update(id) { it.copy(lastOpenedAt = System.currentTimeMillis()) }
+
+    /** Applies a new order (ids not listed keep their relative order at the end). */
+    fun reorder(ids: List<String>) {
+        _apps.update { list ->
+            val byId = list.associateBy { it.id }
+            val ordered = ids.mapNotNull { byId[it] } + list.filter { it.id !in ids }
+            ordered.mapIndexed { i, app -> app.copy(order = i) }
+        }
+    }
+
+    fun nextTileColor(): Int {
+        val last = _apps.value.maxByOrNull { it.order }?.cardColor ?: -1
+        return (last + 1).mod(com.webdroid.app.ui.theme.TileColor.entries.size)
+    }
 
     fun move(fromIndex: Int, toIndex: Int) {
         _apps.update { list ->

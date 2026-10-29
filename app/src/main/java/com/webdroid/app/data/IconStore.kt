@@ -8,11 +8,10 @@ import android.graphics.Paint
 import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Typeface
+import android.graphics.LinearGradient
+import android.graphics.Shader
 import androidx.compose.ui.graphics.toArgb
-import androidx.core.content.res.ResourcesCompat
-import com.webdroid.app.R
-import com.webdroid.app.ui.theme.CardColor
-import com.webdroid.app.ui.theme.ClayPalette
+import com.webdroid.app.ui.theme.TileColor
 import java.io.File
 import java.io.FileOutputStream
 
@@ -42,38 +41,36 @@ class IconStore(private val context: Context) {
     }
 
     /**
-     * Launcher-style icon: the site icon centred on its card colour, or the
-     * site's initial when it has no usable icon.
+     * Launcher-style icon, matching the Apps grid: the site's icon on a light
+     * plate, or its initial on the app's colour.
      */
     fun renderTile(app: WebApp, sizePx: Int, adaptive: Boolean = false): Bitmap {
-        val colors = CardColor.of(app.cardColor)
-        // Launcher, Recents and notification icons keep the light Clay look
-        // whatever theme WebDroid's own UI is in.
-        val background = if (colors == CardColor.Cream) ClayPalette.Light.surfaceCard else colors.background
-        val content = if (colors == CardColor.Cream) ClayPalette.Light.ink else colors.content
+        val tile = TileColor.of(app.cardColor)
+        val icon = load(app.iconFile)
         val bitmap = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
         val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
-        paint.color = background.toArgb()
+        val (top, bottom) = if (icon != null) 0xFFFFFFFF.toInt() to 0xFFF2F2F7.toInt() else tile.top.toArgb() to tile.bottom.toArgb()
+        paint.shader = LinearGradient(0f, 0f, 0f, sizePx.toFloat(), top, bottom, Shader.TileMode.CLAMP)
         if (adaptive) {
             canvas.drawRect(0f, 0f, sizePx.toFloat(), sizePx.toFloat(), paint)
         } else {
-            val r = sizePx * 0.28f
+            val r = sizePx * 0.225f
             canvas.drawRoundRect(RectF(0f, 0f, sizePx.toFloat(), sizePx.toFloat()), r, r, paint)
         }
-        val icon = load(app.iconFile)
+        paint.shader = null
         // Adaptive icons are masked to the central 66%, keep the art inside it.
-        val inner = if (adaptive) sizePx * 0.42f else sizePx * 0.58f
+        val inner = if (adaptive) sizePx * 0.42f else sizePx * 0.62f
         val left = (sizePx - inner) / 2f
         if (icon != null) {
-            val plate = RectF(left - inner * 0.08f, left - inner * 0.08f, left + inner * 1.08f, left + inner * 1.08f)
-            paint.color = 0xFFFFFAF0.toInt()
-            canvas.drawRoundRect(plate, inner * 0.26f, inner * 0.26f, paint)
+            val r = inner * 0.18f
+            canvas.save()
+            canvas.clipPath(android.graphics.Path().apply { addRoundRect(RectF(left, left, left + inner, left + inner), r, r, android.graphics.Path.Direction.CW) })
             canvas.drawBitmap(icon, Rect(0, 0, icon.width, icon.height), RectF(left, left, left + inner, left + inner), paint)
+            canvas.restore()
         } else {
-            val typeface = ResourcesCompat.getFont(context, R.font.inter_semibold) ?: Typeface.DEFAULT_BOLD
-            paint.typeface = typeface
-            paint.color = content.toArgb()
+            paint.typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+            paint.color = tile.glyph.toArgb()
             paint.textSize = inner * 0.9f
             paint.textAlign = Paint.Align.CENTER
             val letter = app.name.trim().firstOrNull()?.uppercaseChar()?.toString() ?: "W"

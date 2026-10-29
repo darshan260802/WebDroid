@@ -93,10 +93,14 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import com.webdroid.app.data.FitMode
+import com.webdroid.app.ui.components.pressScale
 import com.webdroid.app.ui.components.rememberHaptics
-import com.webdroid.app.ui.theme.Clay
-import com.webdroid.app.ui.theme.ClayShapes
-import com.webdroid.app.ui.theme.ClayType
+import com.webdroid.app.ui.components.rememberPressState
+import com.webdroid.app.ui.components.tappable
+import com.webdroid.app.ui.glass.Glass
+import com.webdroid.app.ui.glass.GlassStyle
+import com.webdroid.app.ui.theme.AppShapes
+import com.webdroid.app.ui.theme.AppType
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -105,7 +109,9 @@ import kotlin.math.hypot
 
 private val ScrimTop = Brush.verticalGradient(listOf(Color(0xB3000000), Color.Transparent))
 private val ScrimBottom = Brush.verticalGradient(listOf(Color.Transparent, Color(0xCC000000)))
-private val Accent = Clay.Pink
+/** The player is always dark: tinted controls on clear glass, like a video app. */
+private val Accent = Color(0xFF8E91FF)
+private val ControlGlass = Color.Black.copy(alpha = 0.32f)
 
 private enum class DragMode { NONE, SEEK, BRIGHTNESS, VOLUME, PINCH }
 
@@ -324,7 +330,7 @@ fun PlayerOverlay(
                 Modifier
                     .fillMaxHeight()
                     .width(170.dp)
-                    .clip(if (seekBurstSide < 0) ClayShapes.Xl else ClayShapes.Xl)
+                    .clip(androidx.compose.foundation.shape.RoundedCornerShape(28.dp))
                     .background(Color.White.copy(alpha = 0.10f)),
                 contentAlignment = Alignment.Center,
             ) {
@@ -333,7 +339,7 @@ fun PlayerOverlay(
                         if (seekBurstSide < 0) Icons.Rounded.FastRewind else Icons.Rounded.FastForward,
                         null, tint = Color.White, modifier = Modifier.size(36.dp),
                     )
-                    Text("${seekBurst / 1000}s", color = Color.White, style = ClayType.TitleSm)
+                    Text("${seekBurst / 1000} seconds", color = Color.White, style = AppType.Headline)
                 }
             }
         }
@@ -395,24 +401,24 @@ fun PlayerOverlay(
                         .padding(horizontal = 8.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    RoundControl(Icons.AutoMirrored.Rounded.ArrowBack, "Close player", background = Color.Transparent) {
+                    RoundControl(Icons.AutoMirrored.Rounded.ArrowBack, "Close player", glass = false) {
                         controller.close()
                     }
                     Column(Modifier.weight(1f).padding(horizontal = 6.dp)) {
                         Text(
                             state.request?.title?.ifBlank { null } ?: state.request?.appName.orEmpty(),
-                            color = Color.White, style = ClayType.TitleSm, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            color = Color.White, style = AppType.Headline, maxLines = 1, overflow = TextOverflow.Ellipsis,
                         )
-                        Text(state.request?.appName.orEmpty(), color = Color.White.copy(alpha = 0.7f), style = ClayType.Caption, maxLines = 1)
+                        Text(state.request?.appName.orEmpty(), color = Color.White.copy(alpha = 0.7f), style = AppType.Footnote, maxLines = 1)
                     }
-                    RoundControl(Icons.Rounded.PictureInPictureAlt, "Picture in picture", background = Color.Transparent) {
+                    RoundControl(Icons.Rounded.PictureInPictureAlt, "Picture in picture", glass = false) {
                         controller.enterPip()
                     }
-                    RoundControl(Icons.Rounded.ClosedCaption, "Audio and subtitles", background = Color.Transparent) {
+                    RoundControl(Icons.Rounded.ClosedCaption, "Audio and subtitles", glass = false) {
                         sheet = Sheet.TRACKS
                         controller.showControls(autoHide = false)
                     }
-                    RoundControl(Icons.Rounded.Speed, "Playback speed", background = Color.Transparent) {
+                    RoundControl(Icons.Rounded.Speed, "Playback speed", glass = false) {
                         sheet = Sheet.SPEED
                         controller.showControls(autoHide = false)
                     }
@@ -431,7 +437,7 @@ fun PlayerOverlay(
                             state.isPlaying -> Icons.Rounded.Pause
                             else -> Icons.Rounded.PlayArrow
                         }
-                        RoundControl(playIcon, "Play or pause", size = 76, background = Color.White.copy(alpha = 0.18f)) {
+                        RoundControl(playIcon, "Play or pause", size = 76) {
                             haptics.tap()
                             controller.togglePlay()
                         }
@@ -442,14 +448,14 @@ fun PlayerOverlay(
                         Modifier.align(Alignment.Center).padding(32.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
-                        Text(state.error.orEmpty(), color = Color.White, style = ClayType.BodyMd)
+                        Text(state.error.orEmpty(), color = Color.White, style = AppType.Body, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
                         Spacer(Modifier.height(16.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                             PillButton("Retry") {
                                 state.error = null
                                 state.request?.let { controller.open(it) }
                             }
-                            PillButton("Play in page") {
+                            PillButton("Play in Page", prominent = false) {
                                 state.request?.let(onPlayInPage)
                             }
                         }
@@ -469,20 +475,20 @@ fun PlayerOverlay(
                         Row(
                             Modifier
                                 .padding(bottom = 10.dp)
-                                .clip(ClayShapes.Pill)
+                                .clip(AppShapes.Capsule)
                                 .background(Color.White.copy(alpha = 0.16f))
                                 .clickable { controller.restartFromBeginning() }
                                 .padding(horizontal = 14.dp, vertical = 8.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Text("Resumed at ${PlayerController.formatTime(resumed ?: 0)}", color = Color.White, style = ClayType.Caption)
-                            Text("  ·  Start over", color = Accent, style = ClayType.Caption.copy(fontWeight = FontWeight.SemiBold))
+                            Text("Resumed at ${PlayerController.formatTime(resumed ?: 0)}", color = Color.White, style = AppType.Footnote)
+                            Text("  ·  Start Over", color = Accent, style = AppType.Footnote.copy(fontWeight = FontWeight.SemiBold))
                         }
                     }
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
                             PlayerController.formatTime(if (dragSeekTarget >= 0) dragSeekTarget else state.positionMs),
-                            color = Color.White, style = ClayType.Caption,
+                            color = Color.White, style = AppType.Caption1.copy(fontFeatureSettings = "tnum"),
                         )
                         SeekBar(
                             positionMs = if (dragSeekTarget >= 0) dragSeekTarget else state.positionMs,
@@ -498,7 +504,7 @@ fun PlayerOverlay(
                         )
                         Text(
                             if (state.durationMs > 0) PlayerController.formatTime(state.durationMs) else "LIVE",
-                            color = Color.White, style = ClayType.Caption,
+                            color = Color.White, style = AppType.Caption1.copy(fontFeatureSettings = "tnum"),
                         )
                     }
                     Row(
@@ -507,21 +513,21 @@ fun PlayerOverlay(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Row {
-                            RoundControl(Icons.Rounded.LockOpen, "Lock controls", background = Color.Transparent) {
+                            RoundControl(Icons.Rounded.LockOpen, "Lock controls", glass = false) {
                                 haptics.confirm()
                                 controller.toggleLock()
                             }
-                            RoundControl(Icons.Rounded.ScreenRotation, "Rotate", background = Color.Transparent) {
+                            RoundControl(Icons.Rounded.ScreenRotation, "Rotate", glass = false) {
                                 controller.toggleRotation()
                             }
                         }
                         Row {
                             if (state.request?.isProgressive == true) {
-                                RoundControl(Icons.Rounded.Download, "Download", background = Color.Transparent) {
+                                RoundControl(Icons.Rounded.Download, "Download", glass = false) {
                                     state.request?.let(onDownload)
                                 }
                             }
-                            RoundControl(Icons.Rounded.AspectRatio, "Fit", background = Color.Transparent) {
+                            RoundControl(Icons.Rounded.AspectRatio, "Fit", glass = false) {
                                 sheet = Sheet.FIT
                                 controller.showControls(autoHide = false)
                             }
@@ -556,8 +562,8 @@ fun PlayerOverlay(
                         @Suppress("UNUSED_VARIABLE") val version = state.tracksVersion
                         val sections = remember(state.tracksVersion) { controller.trackSections() }
                         if (sections.isEmpty()) {
-                            SheetTitle("Audio & subtitles")
-                            Text("This stream has a single audio track and no subtitles.", color = Color.White.copy(alpha = 0.7f), style = ClayType.BodySm)
+                            SheetTitle("Audio & Subtitles")
+                            Text("This stream has a single audio track and no subtitles.", color = Color.White.copy(alpha = 0.7f), style = AppType.Subhead)
                         }
                         sections.forEach { section ->
                             SheetTitle(section.title)
@@ -568,7 +574,7 @@ fun PlayerOverlay(
                         }
                     }
                     Sheet.SPEED -> {
-                        SheetTitle("Playback speed")
+                        SheetTitle("Playback Speed")
                         listOf(0.25f, 0.5f, 0.75f, 1f, 1.25f, 1.5f, 1.75f, 2f, 3f).forEach { speed ->
                             SheetOption(if (speed == 1f) "Normal" else PlayerController.formatSpeed(speed), state.speed == speed) {
                                 controller.setSpeed(speed)
@@ -577,9 +583,9 @@ fun PlayerOverlay(
                         }
                     }
                     Sheet.FIT -> {
-                        SheetTitle("Fit to screen")
-                        SheetOption("Fit (original ratio)", state.fitMode == FitMode.FIT) { controller.setFit(FitMode.FIT); dismiss() }
-                        SheetOption("Zoom to fill", state.fitMode == FitMode.ZOOM) { controller.setFit(FitMode.ZOOM); dismiss() }
+                        SheetTitle("Fit to Screen")
+                        SheetOption("Fit", state.fitMode == FitMode.FIT) { controller.setFit(FitMode.FIT); dismiss() }
+                        SheetOption("Zoom to Fill", state.fitMode == FitMode.ZOOM) { controller.setFit(FitMode.ZOOM); dismiss() }
                         SheetOption("Stretch", state.fitMode == FitMode.FILL) { controller.setFit(FitMode.FILL); dismiss() }
                     }
                     Sheet.NONE -> Unit
@@ -599,59 +605,68 @@ private fun HintPill(hint: GestureHint) {
         GestureKind.SEEK_BACK -> Icons.Rounded.FastRewind
         else -> if (hint.text.startsWith("−")) Icons.Rounded.FastRewind else Icons.Rounded.FastForward
     }
-    Column(
-        Modifier
-            .clip(ClayShapes.Lg)
-            .background(Color.Black.copy(alpha = 0.62f))
-            .padding(horizontal = 18.dp, vertical = 12.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(icon, null, tint = Color.White, modifier = Modifier.size(22.dp))
-            Spacer(Modifier.width(8.dp))
-            Text(hint.text, color = Color.White, style = ClayType.TitleSm)
-        }
-        if (hint.kind == GestureKind.BRIGHTNESS || hint.kind == GestureKind.VOLUME || hint.kind == GestureKind.SEEK) {
-            Spacer(Modifier.height(10.dp))
-            val fraction by animateFloatAsState(hint.fraction.coerceIn(0f, 1f), label = "hint")
-            Box(Modifier.width(150.dp).height(4.dp).clip(ClayShapes.Pill).background(Color.White.copy(alpha = 0.25f))) {
-                Box(Modifier.fillMaxHeight().fillMaxWidth(fraction).clip(ClayShapes.Pill).background(Accent))
+    Glass(null, cornerRadius = 20.dp, style = GlassStyle.Clear, tint = Color.Black.copy(alpha = 0.55f), shadow = false) {
+        Column(
+            Modifier.padding(horizontal = 18.dp, vertical = 12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(icon, null, tint = Color.White, modifier = Modifier.size(22.dp))
+                Spacer(Modifier.width(8.dp))
+                Text(hint.text, color = Color.White, style = AppType.Headline.copy(fontFeatureSettings = "tnum"))
+            }
+            if (hint.kind == GestureKind.BRIGHTNESS || hint.kind == GestureKind.VOLUME || hint.kind == GestureKind.SEEK) {
+                Spacer(Modifier.height(10.dp))
+                val fraction by animateFloatAsState(hint.fraction.coerceIn(0f, 1f), com.webdroid.app.ui.theme.Motion.snappy(), label = "hint")
+                Box(Modifier.width(150.dp).height(5.dp).clip(AppShapes.Capsule).background(Color.White.copy(alpha = 0.25f))) {
+                    Box(Modifier.fillMaxHeight().fillMaxWidth(fraction).clip(AppShapes.Capsule).background(Color.White))
+                }
             }
         }
     }
 }
 
+/** A player button: on clear glass, or bare (top and bottom bars). Presses shrink it. */
 @Composable
 private fun RoundControl(
     icon: ImageVector,
     description: String,
     size: Int = 44,
-    background: Color = Color.Black.copy(alpha = 0.28f),
+    glass: Boolean = true,
     onClick: () -> Unit,
 ) {
-    Box(
-        Modifier
-            .size(size.dp)
-            .clip(CircleShape)
-            .background(background)
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) {
-        Icon(icon, description, tint = Color.White, modifier = Modifier.size((size * 0.52f).dp))
+    val press = rememberPressState()
+    val content: @Composable () -> Unit = {
+        Box(
+            Modifier.fillMaxSize().clip(CircleShape).tappable(press, haptic = false, onClick = onClick),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(icon, description, tint = Color.White, modifier = Modifier.size((size * 0.52f).dp))
+        }
+    }
+    if (glass) {
+        Glass(
+            null, Modifier.size(size.dp).pressScale(press, 0.9f),
+            cornerRadius = (size / 2f).dp, style = GlassStyle.Clear, tint = ControlGlass, shadow = false,
+        ) { content() }
+    } else {
+        Box(Modifier.size(size.dp).pressScale(press, 0.86f)) { content() }
     }
 }
 
 @Composable
-private fun PillButton(text: String, onClick: () -> Unit) {
+private fun PillButton(text: String, prominent: Boolean = true, onClick: () -> Unit) {
+    val press = rememberPressState()
     Text(
         text,
-        color = Clay.Black,
-        style = ClayType.Button,
+        color = if (prominent) Color.Black else Color.White,
+        style = AppType.Headline,
         modifier = Modifier
-            .clip(ClayShapes.Md)
-            .background(Clay.Cream)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 18.dp, vertical = 12.dp),
+            .pressScale(press, 0.96f)
+            .clip(AppShapes.Capsule)
+            .background(if (prominent) Color.White else Color.White.copy(alpha = 0.18f))
+            .tappable(press, onClick = onClick)
+            .padding(horizontal = 22.dp, vertical = 13.dp),
     )
 }
 
@@ -714,7 +729,7 @@ private fun SeekBar(
             val h = lineHeight.dp.toPx()
             drawRoundRect(Color.White.copy(alpha = 0.22f), Offset(0f, y - h / 2), Size(size.width, h), CornerRadius(h))
             drawRoundRect(Color.White.copy(alpha = 0.42f), Offset(0f, y - h / 2), Size(size.width * buffered, h), CornerRadius(h))
-            drawRoundRect(Accent, Offset(0f, y - h / 2), Size(size.width * progress, h), CornerRadius(h))
+            drawRoundRect(Color.White, Offset(0f, y - h / 2), Size(size.width * progress, h), CornerRadius(h))
             drawCircle(Color.White, thumb.dp.toPx(), Offset(size.width * progress, y))
         }
         // Time bubble above the thumb while scrubbing.
@@ -724,12 +739,12 @@ private fun SeekBar(
             Text(
                 PlayerController.formatTime(positionMs),
                 color = Color.Black,
-                style = ClayType.Caption.copy(fontWeight = FontWeight.SemiBold),
+                style = AppType.Caption1.copy(fontWeight = FontWeight.SemiBold, fontFeatureSettings = "tnum"),
                 textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                 modifier = Modifier
                     .offset(x = x.coerceIn(0.dp, maxWidth - bubbleWidth), y = (-30).dp)
                     .width(bubbleWidth)
-                    .clip(ClayShapes.Pill)
+                    .clip(AppShapes.Capsule)
                     .background(Color.White)
                     .padding(vertical = 4.dp),
             )
@@ -743,8 +758,8 @@ private fun PlayerSheet(content: @Composable () -> Unit) {
         Modifier
             .fillMaxWidth()
             .heightIn(max = 460.dp)
-            .clip(androidx.compose.foundation.shape.RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
-            .background(Color(0xFF141414))
+            .clip(androidx.compose.foundation.shape.RoundedCornerShape(topStart = 30.dp, topEnd = 30.dp))
+            .background(Color(0xFF1C1C1E))
             .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { }
             .windowInsetsPadding(WindowInsets.navigationBars)
             .verticalScroll(rememberScrollState())
@@ -753,9 +768,9 @@ private fun PlayerSheet(content: @Composable () -> Unit) {
         Box(
             Modifier
                 .align(Alignment.CenterHorizontally)
-                .size(width = 36.dp, height = 4.dp)
-                .clip(ClayShapes.Pill)
-                .background(Color.White.copy(alpha = 0.25f))
+                .size(width = 36.dp, height = 5.dp)
+                .clip(AppShapes.Capsule)
+                .background(Color.White.copy(alpha = 0.3f))
         )
         Spacer(Modifier.height(12.dp))
         content()
@@ -765,10 +780,10 @@ private fun PlayerSheet(content: @Composable () -> Unit) {
 @Composable
 private fun SheetTitle(text: String) {
     Text(
-        text.uppercase(),
-        color = Color.White.copy(alpha = 0.55f),
-        style = ClayType.CaptionUpper,
-        modifier = Modifier.padding(top = 8.dp, bottom = 6.dp),
+        text,
+        color = Color.White.copy(alpha = 0.6f),
+        style = AppType.SectionHeader,
+        modifier = Modifier.padding(start = 4.dp, top = 8.dp, bottom = 6.dp),
     )
 }
 
@@ -777,13 +792,14 @@ private fun SheetOption(label: String, selected: Boolean, onClick: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
-            .clip(ClayShapes.Md)
+            .heightIn(min = 48.dp)
+            .clip(AppShapes.Medium)
             .background(if (selected) Color.White.copy(alpha = 0.10f) else Color.Transparent)
             .clickable(onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 13.dp),
+            .padding(horizontal = 14.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(label, color = Color.White, style = ClayType.BodyMd.copy(fontSize = 15.sp), modifier = Modifier.weight(1f))
+        Text(label, color = Color.White, style = AppType.Body, modifier = Modifier.weight(1f))
         if (selected) Icon(Icons.Rounded.Check, null, tint = Accent, modifier = Modifier.size(20.dp))
     }
 }

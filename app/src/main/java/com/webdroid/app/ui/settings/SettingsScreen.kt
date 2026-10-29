@@ -2,358 +2,267 @@ package com.webdroid.app.ui.settings
 
 import android.content.Intent
 import android.net.Uri
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.expandVertically
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import android.os.PowerManager
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.ArrowBack
-import androidx.compose.material.icons.rounded.Code
-import androidx.compose.material.icons.rounded.DarkMode
+import androidx.compose.material.icons.automirrored.rounded.OpenInNew
+import androidx.compose.material.icons.rounded.BatteryChargingFull
+import androidx.compose.material.icons.rounded.Contrast
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.History
-import androidx.compose.material.icons.rounded.PictureInPicture
 import androidx.compose.material.icons.rounded.ScreenRotation
-import androidx.compose.material.icons.rounded.Shield
-import androidx.compose.material.icons.rounded.Sync
 import androidx.compose.material.icons.rounded.VolumeUp
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import com.webdroid.app.BuildConfig
-import com.webdroid.app.adblock.AdblockEngine
-import com.webdroid.app.adblock.FilterListInfo
 import com.webdroid.app.data.FitMode
 import com.webdroid.app.data.GlobalSettings
 import com.webdroid.app.data.ThemeMode
-import com.webdroid.app.ui.components.ClayButton
-import com.webdroid.app.ui.components.ClayButtonStyle
-import com.webdroid.app.ui.components.ClayIconButton
-import com.webdroid.app.ui.components.ClaySegmented
-import com.webdroid.app.ui.components.ClaySwitchRow
-import com.webdroid.app.ui.components.HairlineDivider
-import com.webdroid.app.ui.components.SectionLabel
-import com.webdroid.app.ui.home.formatCount
-import com.webdroid.app.ui.theme.Clay
-import com.webdroid.app.ui.theme.ClayShapes
-import com.webdroid.app.ui.theme.ClayType
+import com.webdroid.app.ui.components.ActionRow
+import com.webdroid.app.ui.components.ListRow
+import com.webdroid.app.ui.components.ListScreen
+import com.webdroid.app.ui.components.ListSection
+import com.webdroid.app.ui.components.LocalChromeBackdrop
+import com.webdroid.app.ui.components.NavStack
+import com.webdroid.app.ui.components.SectionGap
+import com.webdroid.app.ui.components.SegmentedControl
+import com.webdroid.app.ui.components.ToggleRow
+import com.webdroid.app.ui.components.rememberPressState
+import com.webdroid.app.ui.components.tappable
+import com.webdroid.app.ui.theme.AppColors
+import com.webdroid.app.ui.theme.AppType
+import com.webdroid.app.ui.theme.Spacing
+import com.webdroid.app.ui.update.ReleaseNotes
 import com.webdroid.app.ui.update.UpdateActions
-import com.webdroid.app.ui.update.UpdateSettingsSection
+import com.webdroid.app.ui.update.UpdatesSection
+import com.webdroid.app.ui.update.info
 import com.webdroid.app.update.UpdateState
 
+sealed interface SettingsRoute {
+    data object Root : SettingsRoute
+    data object WhatsNew : SettingsRoute
+    data object Licenses : SettingsRoute
+}
+
+private val Pink = Color(0xFFFF2D55)
+private val Orange = Color(0xFFFF9500)
+private val Blue = Color(0xFF1E7BF2)
+private val Green = Color(0xFF30B350)
+private val Gray = Color(0xFF8E8E93)
+
+/** The Settings tab. */
 @Composable
 fun SettingsScreen(
+    stack: List<SettingsRoute>,
+    onPush: (SettingsRoute) -> Unit,
+    onPop: () -> Unit,
     settings: GlobalSettings,
-    status: AdblockEngine.Status,
-    lists: List<FilterListInfo>,
-    lastUpdated: Long,
     onUpdate: ((GlobalSettings) -> GlobalSettings) -> Unit,
-    onUpdateFilters: () -> Unit,
     update: UpdateState,
     updateLastChecked: Long,
     updateActions: UpdateActions,
-    onBack: () -> Unit,
 ) {
-    val context = LocalContext.current
-    val grouped = remember(lists) { lists.groupBy { it.group } }
-    val pendingChanges = lists.any { list -> settings.listOverrides[list.id] != null && settings.listOverrides[list.id] != list.enabled }
-
-    Box(Modifier.fillMaxSize().background(Clay.Canvas)) {
-        Column(
-            Modifier
-                .fillMaxSize()
-                .verticalScroll(rememberScrollState())
-                .statusBarsPadding()
-                .navigationBarsPadding()
-                .padding(horizontal = 20.dp)
-                .padding(bottom = 32.dp),
-        ) {
-            Row(Modifier.padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                ClayIconButton(Icons.AutoMirrored.Rounded.ArrowBack, "Back", onBack)
-                Spacer(Modifier.width(14.dp))
-                Text("Settings", style = ClayType.TitleLg, color = Clay.Ink)
-            }
-
-            // Ad blocker hero card (teal = featured)
-            Column(
-                Modifier
-                    .fillMaxWidth()
-                    .clip(ClayShapes.Xl)
-                    .background(Clay.Teal)
-                    .padding(24.dp),
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.size(48.dp).clip(ClayShapes.Lg).background(Clay.Mint), contentAlignment = Alignment.Center) {
-                        Icon(Icons.Rounded.Shield, null, tint = Clay.Black, modifier = Modifier.size(26.dp))
-                    }
-                    Spacer(Modifier.width(14.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text("Ad blocker", style = ClayType.TitleLg, color = Clay.OnDark)
-                        Text("Powered by uBlock Origin", style = ClayType.Caption, color = Clay.OnDarkSoft)
-                    }
-                }
-                Spacer(Modifier.height(18.dp))
-                val line = when (status.state) {
-                    AdblockEngine.State.READY ->
-                        "${formatCount(status.networkFilters)} network · ${formatCount(status.cosmeticFilters)} cosmetic · ${formatCount(status.scriptletFilters)} scriptlet filters"
-                    AdblockEngine.State.LOADING, AdblockEngine.State.IDLE -> "Loading filters…"
-                    AdblockEngine.State.FAILED -> "Couldn't load filters: ${status.lastError.orEmpty()}"
-                    AdblockEngine.State.UNAVAILABLE -> status.lastError ?: "Unavailable in this build"
-                }
-                Text(line, style = ClayType.BodySm, color = Clay.OnDark)
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    buildString {
-                        append(if (lastUpdated > 0) "Lists updated ${relative(lastUpdated)}" else "Using the lists built into this version")
-                        if (AdblockEngine.blockedTotal.get() > 0) append(" · ${AdblockEngine.blockedTotal.get()} blocked this session")
-                    },
-                    style = ClayType.Caption, color = Clay.OnDarkSoft,
-                )
-                AnimatedVisibility(visible = status.updating, enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
-                    Row(Modifier.padding(top = 14.dp), verticalAlignment = Alignment.CenterVertically) {
-                        CircularProgressIndicator(color = Clay.Mint, strokeWidth = 2.dp, modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(10.dp))
-                        Text(status.updateProgress ?: "Updating…", style = ClayType.Caption, color = Clay.OnDark)
-                    }
-                }
-                Spacer(Modifier.height(18.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    ClayButton(
-                        if (pendingChanges) "Apply list changes" else "Update lists now",
-                        onClick = onUpdateFilters,
-                        icon = Icons.Rounded.Sync,
-                        style = ClayButtonStyle.OnColor,
-                        enabled = !status.updating,
-                        height = 46.dp,
-                    )
-                }
-            }
-
-            Spacer(Modifier.height(16.dp))
-            Column(Modifier.fillMaxWidth().clip(ClayShapes.Lg).background(Clay.SurfaceSoft).padding(horizontal = 16.dp, vertical = 4.dp)) {
-                ClaySwitchRow(
-                    "Block ads everywhere", "Master switch. Each app can also turn it off.",
-                    settings.adBlockEnabled, { v -> onUpdate { it.copy(adBlockEnabled = v) } },
-                )
-            }
-
-            Spacer(Modifier.height(26.dp))
-            SectionLabel("Appearance")
-            Spacer(Modifier.height(8.dp))
-            ClaySegmented(
-                options = listOf(ThemeMode.SYSTEM to "System", ThemeMode.LIGHT to "Light", ThemeMode.DARK to "Dark"),
-                selected = settings.themeMode,
-                onSelect = { mode -> onUpdate { it.copy(themeMode = mode) } },
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Row(Modifier.padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Rounded.DarkMode, null, tint = Clay.Muted, modifier = Modifier.size(16.dp))
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    "Applies to WebDroid's own screens and menus. Websites follow your phone's setting; turn on “Force dark” in an app's settings to darken one.",
-                    style = ClayType.Caption, color = Clay.Muted,
-                )
-            }
-
-            Spacer(Modifier.height(22.dp))
-            SectionLabel("Filter lists")
-            Text(
-                "Same lists uBlock Origin uses. They refresh in the background every few days; changes apply after an update.",
-                style = ClayType.Caption, color = Clay.Muted, modifier = Modifier.padding(top = 4.dp, bottom = 8.dp),
-            )
-            grouped.forEach { (group, items) ->
-                Text(group, style = ClayType.TitleSm, color = Clay.Ink, modifier = Modifier.padding(top = 10.dp, bottom = 2.dp))
-                Column(Modifier.fillMaxWidth().clip(ClayShapes.Lg).background(Clay.SurfaceSoft).padding(horizontal = 16.dp)) {
-                    items.forEachIndexed { i, list ->
-                        val enabled = settings.listOverrides[list.id] ?: list.enabled
-                        ClaySwitchRow(
-                            list.title, if (list.enabled) "Default" else null, enabled,
-                            { v ->
-                                onUpdate { s ->
-                                    val overrides = s.listOverrides.toMutableMap()
-                                    if (v == list.enabled) overrides.remove(list.id) else overrides[list.id] = v
-                                    s.copy(listOverrides = overrides)
-                                }
-                            },
-                        )
-                        if (i != items.lastIndex) HairlineDivider()
+    NavStack(stack, onPop, backdrop = LocalChromeBackdrop.current) { route ->
+        when (route) {
+            SettingsRoute.Root -> SettingsRoot(settings, onUpdate, update, updateLastChecked, updateActions, onPush)
+            SettingsRoute.WhatsNew -> ListScreen("What’s New", largeTitle = false, onBack = onPop) {
+                item(key = "notes") {
+                    val notes = update.info?.notes.orEmpty()
+                    Column(Modifier.padding(horizontal = Spacing.Edge + 4.dp, vertical = 8.dp)) {
+                        if (notes.isBlank()) Text("No release notes.", style = AppType.Body, color = AppColors.SecondaryLabel)
+                        else ReleaseNotes(notes)
                     }
                 }
             }
-
-            Spacer(Modifier.height(26.dp))
-            SectionLabel("Video player")
-            Spacer(Modifier.height(8.dp))
-            Column(Modifier.fillMaxWidth().clip(ClayShapes.Lg).background(Clay.SurfaceSoft).padding(horizontal = 16.dp, vertical = 4.dp)) {
-                ClaySwitchRow(
-                    "Background play", "Keep listening with the screen off, with media controls",
-                    settings.backgroundPlay, { v -> onUpdate { it.copy(backgroundPlay = v) } }, icon = Icons.Rounded.VolumeUp,
-                )
-                ClaySwitchRow(
-                    "Remember position", "Continue videos where you stopped",
-                    settings.rememberPosition, { v -> onUpdate { it.copy(rememberPosition = v) } }, icon = Icons.Rounded.History,
-                )
-                ClaySwitchRow(
-                    "Auto-rotate", "Turn to landscape for wide videos",
-                    settings.autoRotate, { v -> onUpdate { it.copy(autoRotate = v) } }, icon = Icons.Rounded.ScreenRotation,
-                )
-            }
-            Spacer(Modifier.height(14.dp))
-            Text("Default fit", style = ClayType.TitleSm, color = Clay.Ink)
-            Spacer(Modifier.height(8.dp))
-            ClaySegmented(
-                options = listOf(FitMode.FIT to "Fit", FitMode.ZOOM to "Zoom", FitMode.FILL to "Stretch"),
-                selected = settings.defaultFit,
-                onSelect = { mode -> onUpdate { it.copy(defaultFit = mode) } },
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Row(Modifier.padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Rounded.PictureInPicture, null, tint = Clay.Muted, modifier = Modifier.size(16.dp))
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    "Gestures: left side brightness, right side volume, swipe to seek, double-tap ±10s, pinch to zoom, hold for 2×.",
-                    style = ClayType.Caption, color = Clay.Muted,
-                )
-            }
-
-            Spacer(Modifier.height(26.dp))
-            SectionLabel("VPN")
-            Text(
-                "Send chosen web apps through Tor, a WireGuard config or a proxy. Only those apps' sites use it; pick one per app in its settings.",
-                style = ClayType.Caption, color = Clay.Muted, modifier = Modifier.padding(top = 4.dp, bottom = 10.dp),
-            )
-            VpnSettingsSection()
-
-            Spacer(Modifier.height(26.dp))
-            SectionLabel("Background & notifications")
-            Spacer(Modifier.height(8.dp))
-            val power = context.getSystemService(android.content.Context.POWER_SERVICE) as android.os.PowerManager
-            var unrestricted by remember { androidx.compose.runtime.mutableStateOf(power.isIgnoringBatteryOptimizations(context.packageName)) }
-            androidx.lifecycle.compose.LifecycleResumeEffect(Unit) {
-                unrestricted = power.isIgnoringBatteryOptimizations(context.packageName)
-                onPauseOrDispose { }
-            }
-            Column(Modifier.fillMaxWidth().clip(ClayShapes.Lg).background(Clay.SurfaceSoft).padding(16.dp)) {
-                Text(
-                    if (unrestricted) "Battery use: unrestricted" else "Battery use: optimised",
-                    style = ClayType.TitleSm, color = Clay.Ink,
-                )
-                Text(
-                    "Web apps with “Stay connected” keep receiving notifications more reliably when Android doesn't put WebDroid to sleep.",
-                    style = ClayType.BodySm, color = Clay.Muted, modifier = Modifier.padding(top = 4.dp, bottom = 12.dp),
-                )
-                if (!unrestricted) {
-                    ClayButton(
-                        "Allow background activity",
-                        onClick = {
-                            runCatching {
-                                context.startActivity(
-                                    Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${context.packageName}"))
-                                )
-                            }
-                        },
-                        style = ClayButtonStyle.Secondary,
-                        height = 44.dp,
-                    )
-                }
-            }
-
-            Spacer(Modifier.height(26.dp))
-            SectionLabel("Updates")
-            Spacer(Modifier.height(8.dp))
-            UpdateSettingsSection(update, updateLastChecked, settings, onUpdate, updateActions)
-
-            Spacer(Modifier.height(26.dp))
-            SectionLabel("About")
-            Spacer(Modifier.height(8.dp))
-            Column(
-                Modifier
-                    .fillMaxWidth()
-                    .clip(ClayShapes.Xl)
-                    .background(Clay.Lavender)
-                    .padding(22.dp),
-            ) {
-                Text("WebDroid ${BuildConfig.VERSION_NAME}", style = ClayType.TitleMd, color = Clay.Black)
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    "Free software under the GNU GPL v3. Ad blocking uses uBlock Origin's engine by Raymond Hill and contributors; filter lists by the uBlock Origin, EasyList, Peter Lowe and malware-filter teams.",
-                    style = ClayType.BodySm, color = Clay.Black,
-                )
-                Spacer(Modifier.height(14.dp))
-                Row(
-                    Modifier
-                        .clip(ClayShapes.Pill)
-                        .background(Clay.Canvas)
-                        .clickable {
-                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/darshan260802/WebDroid")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-                        }
-                        .padding(horizontal = 14.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(Icons.Rounded.Code, null, tint = Clay.Ink, modifier = Modifier.size(16.dp))
-                    Spacer(Modifier.width(8.dp))
-                    Text("Source code & releases", style = ClayType.Caption, color = Clay.Ink)
-                }
-            }
-            Spacer(Modifier.height(18.dp))
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
-                Text("Made with", style = ClayType.Caption, color = Clay.MutedSoft)
-                Icon(Icons.Rounded.Favorite, null, tint = Clay.Pink, modifier = Modifier.padding(horizontal = 4.dp).size(14.dp))
-                Text(
-                    "Darshan Patel",
-                    style = ClayType.Caption.copy(fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold),
-                    color = Clay.Ink,
-                    textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline,
-                    modifier = Modifier
-                        .clip(ClayShapes.Xs)
-                        .clickable {
-                            runCatching {
-                                context.startActivity(
-                                    Intent(Intent.ACTION_VIEW, Uri.parse("https://www.linkedin.com/in/darshan-patel-2608"))
-                                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                )
-                            }
-                        }
-                        .padding(horizontal = 2.dp, vertical = 6.dp),
-                )
-            }
+            SettingsRoute.Licenses -> LicensesScreen(onPop)
         }
     }
 }
 
-private fun relative(time: Long): String {
-    val minutes = (System.currentTimeMillis() - time) / 60_000
-    return when {
-        minutes < 1 -> "just now"
-        minutes < 60 -> "$minutes min ago"
-        minutes < 60 * 24 -> "${minutes / 60} h ago"
-        else -> "${minutes / (60 * 24)} days ago"
+@Composable
+private fun SettingsRoot(
+    settings: GlobalSettings,
+    onUpdate: ((GlobalSettings) -> GlobalSettings) -> Unit,
+    update: UpdateState,
+    updateLastChecked: Long,
+    updateActions: UpdateActions,
+    onPush: (SettingsRoute) -> Unit,
+) {
+    val context = LocalContext.current
+    val power = context.getSystemService(android.content.Context.POWER_SERVICE) as PowerManager
+    var unrestricted by remember { mutableStateOf(power.isIgnoringBatteryOptimizations(context.packageName)) }
+    androidx.lifecycle.compose.LifecycleResumeEffect(Unit) {
+        unrestricted = power.isIgnoringBatteryOptimizations(context.packageName)
+        onPauseOrDispose { }
+    }
+    val actions = UpdateActions(
+        install = updateActions.install,
+        download = updateActions.download,
+        checkNow = updateActions.checkNow,
+        later = updateActions.later,
+        showNotes = { onPush(SettingsRoute.WhatsNew) },
+    )
+
+    ListScreen("Settings", largeTitle = true) {
+        item(key = "appearance") {
+            ListSection(
+                header = "Appearance",
+                footer = "Applies to WebDroid’s own screens. Websites follow your phone’s setting; turn on Force Dark in an app’s settings to darken one.",
+            ) {
+                row(16.dp) {
+                    Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+                        SegmentedControl(
+                            listOf(ThemeMode.SYSTEM to "Automatic", ThemeMode.LIGHT to "Light", ThemeMode.DARK to "Dark"),
+                            settings.themeMode,
+                            { mode -> onUpdate { it.copy(themeMode = mode) } },
+                        )
+                    }
+                }
+                row {
+                    ToggleRow(
+                        "Reduce Transparency", settings.reduceTransparency,
+                        { v -> onUpdate { it.copy(reduceTransparency = v) } },
+                        subtitle = "Solid bars and menus instead of glass",
+                        icon = Icons.Rounded.Contrast, iconBackground = Gray,
+                    )
+                }
+            }
+        }
+        item(key = "player") {
+            SectionGap()
+            ListSection(header = "Video Player", footer = "Gestures: left side for brightness, right side for volume, swipe across to seek, double-tap to skip 10 seconds, pinch to zoom, hold for 2× speed.") {
+                row { ToggleRow("Background Play", settings.backgroundPlay, { v -> onUpdate { it.copy(backgroundPlay = v) } }, subtitle = "Keep listening with the screen off", icon = Icons.Rounded.VolumeUp, iconBackground = Pink) }
+                row { ToggleRow("Remember Position", settings.rememberPosition, { v -> onUpdate { it.copy(rememberPosition = v) } }, icon = Icons.Rounded.History, iconBackground = Orange) }
+                row { ToggleRow("Auto-Rotate", settings.autoRotate, { v -> onUpdate { it.copy(autoRotate = v) } }, subtitle = "Turn to landscape for wide videos", icon = Icons.Rounded.ScreenRotation, iconBackground = Blue) }
+                row(16.dp) {
+                    Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+                        Text("Default Fit", style = AppType.Body, color = AppColors.Label, modifier = Modifier.padding(bottom = 10.dp))
+                        SegmentedControl(
+                            listOf(FitMode.FIT to "Fit", FitMode.ZOOM to "Zoom", FitMode.FILL to "Stretch"),
+                            settings.defaultFit,
+                            { mode -> onUpdate { it.copy(defaultFit = mode) } },
+                        )
+                    }
+                }
+            }
+        }
+        item(key = "background") {
+            SectionGap()
+            ListSection(
+                header = "Background",
+                footer = "Apps with Stay Connected keep delivering notifications more reliably when Android doesn’t put WebDroid to sleep.",
+            ) {
+                row {
+                    ListRow(
+                        "Battery Use",
+                        icon = Icons.Rounded.BatteryChargingFull, iconBackground = Green,
+                        value = if (unrestricted) "Unrestricted" else "Optimized",
+                        chevron = !unrestricted,
+                        onClick = if (unrestricted) null else {
+                            {
+                                runCatching {
+                                    context.startActivity(
+                                        Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${context.packageName}"))
+                                    )
+                                }
+                            }
+                        },
+                    )
+                }
+            }
+        }
+        item(key = "updates") {
+            SectionGap()
+            UpdatesSection(update, updateLastChecked, settings, onUpdate, actions)
+        }
+        item(key = "about") {
+            SectionGap()
+            ListSection(header = "About") {
+                row(16.dp) { ListRow("Version", value = BuildConfig.VERSION_NAME) }
+                row(16.dp) {
+                    ListRow("Source Code & Releases", onClick = {
+                        runCatching {
+                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/darshan260802/WebDroid")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                        }
+                    }, trailing = { Icon(Icons.AutoMirrored.Rounded.OpenInNew, null, tint = AppColors.TertiaryLabel, modifier = Modifier.size(18.dp)) })
+                }
+                row(16.dp) { ListRow("Licenses", chevron = true, onClick = { onPush(SettingsRoute.Licenses) }) }
+            }
+        }
+        item(key = "credit") {
+            Credit()
+        }
+    }
+}
+
+/** "Made with ♥ Darshan Patel", the name linking to his LinkedIn profile. */
+@Composable
+private fun Credit() {
+    val context = LocalContext.current
+    val press = rememberPressState()
+    Row(
+        Modifier.fillMaxWidth().padding(top = 28.dp, bottom = 8.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text("Made with", style = AppType.Footnote, color = AppColors.SecondaryLabel)
+        Icon(Icons.Rounded.Favorite, "love", tint = Color(0xFFFF2D55), modifier = Modifier.padding(horizontal = 4.dp).size(14.dp))
+        Text(
+            "Darshan Patel",
+            style = AppType.Footnote.copy(fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold),
+            color = AppColors.Accent,
+            textDecoration = TextDecoration.Underline,
+            modifier = Modifier
+                .tappable(press, role = Role.Button) {
+                    runCatching {
+                        context.startActivity(
+                            Intent(Intent.ACTION_VIEW, Uri.parse("https://www.linkedin.com/in/darshan-patel-2608")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        )
+                    }
+                }
+                .padding(vertical = 12.dp, horizontal = 2.dp),
+        )
+    }
+}
+
+@Composable
+private fun LicensesScreen(onBack: () -> Unit) {
+    val entries = listOf(
+        "WebDroid" to "GNU General Public License v3.0",
+        "uBlock Origin (engine and filter lists)" to "GPL v3 · Raymond Hill and contributors",
+        "EasyList, Peter Lowe’s list, malware filters" to "Their respective licenses (CC BY-SA, MIT…)",
+        "Tor (tor-android)" to "BSD 3-Clause · The Tor Project, Guardian Project",
+        "WireGuard (wireguard-go)" to "MIT · Jason A. Donenfeld",
+        "gVisor netstack" to "Apache 2.0 · Google",
+        "AndroidX, Jetpack Compose, Media3" to "Apache 2.0 · Google",
+        "OkHttp" to "Apache 2.0 · Square",
+        "Zipline (QuickJS)" to "Apache 2.0 · Cash App; QuickJS MIT",
+        "jsoup" to "MIT · Jonathan Hedley",
+    )
+    ListScreen("Licenses", largeTitle = false, onBack = onBack) {
+        item(key = "licenses") {
+            ListSection(footer = "WebDroid is free software: you can redistribute it and modify it under the terms of the GNU GPL v3.") {
+                entries.forEach { (name, license) ->
+                    row(16.dp) { ListRow(name, subtitle = license) }
+                }
+            }
+        }
     }
 }
